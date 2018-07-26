@@ -21,7 +21,7 @@ TEST(Socket, Connect) {
   outF.get();
 }
 
-TEST(Socket, SendReceive) {
+TEST(Socket, SendReceive1) {
   ListeningSocket s(PORT);
   std::future<RWSocket&> outF = std::async(&ListeningSocket::accept, &s);
   ConnectedSocket in(IP, PORT);
@@ -33,6 +33,82 @@ TEST(Socket, SendReceive) {
     in.read(&output, sizeof(uint32_t));
     output = ntohl(output);
     EXPECT_EQ(input, output);
+  }
+}
+
+TEST(Socket, SendReceive2) {
+  ListeningSocket s(PORT);
+  std::future<RWSocket&> outF1 = std::async(&ListeningSocket::accept, &s);
+  ConnectedSocket in1(IP, PORT);
+  RWSocket& out1 = outF1.get();
+  std::future<RWSocket&> outF2 = std::async(&ListeningSocket::accept, &s);
+  ConnectedSocket in2(IP, PORT);
+  RWSocket& out2 = outF2.get();
+  for (uint32_t input = 0; input < 0xabcd; input++) {
+    uint32_t network_format = htonl(input);
+    out1.write(&network_format, sizeof(uint32_t));
+    out2.write(&network_format, sizeof(uint32_t));
+    uint32_t output;
+    in1.read(&output, sizeof(uint32_t));
+    output = ntohl(output);
+    EXPECT_EQ(input, output);
+    in2.read(&output, sizeof(uint32_t));
+    output = ntohl(output);
+    EXPECT_EQ(input, output);
+  }
+}
+
+TEST(Socket, Broadcast1) {
+  ListeningSocket s(PORT);
+  std::future<RWSocket&> outF = std::async(&ListeningSocket::accept, &s);
+  ConnectedSocket in(IP, PORT);
+  outF.get();// make async return
+  for (uint32_t input = 0; input < 0xabcd; input++) {
+    uint32_t network_format = htonl(input);
+    s.broadcast(&network_format, sizeof(uint32_t));
+    uint32_t output;
+    in.read(&output, sizeof(uint32_t));
+    output = ntohl(output);
+    EXPECT_EQ(input, output);
+  }
+}
+
+TEST(Socket, Broadcast2) {
+  ListeningSocket s(PORT);
+  std::future<RWSocket&> outF1 = std::async(&ListeningSocket::accept, &s);
+  ConnectedSocket in1(IP, PORT);
+  outF1.get();// make async return
+  std::future<RWSocket&> outF2 = std::async(&ListeningSocket::accept, &s);
+  ConnectedSocket in2(IP, PORT);
+  outF2.get();// make async return
+  for (uint32_t input = 0; input < 0xabcd; input++) {
+    uint32_t network_format = htonl(input);
+    s.broadcast(&network_format, sizeof(uint32_t));
+    uint32_t output;
+    in1.read(&output, sizeof(uint32_t));
+    output = ntohl(output);
+    EXPECT_EQ(input, output);
+    in2.read(&output, sizeof(uint32_t));
+    output = ntohl(output);
+    EXPECT_EQ(input, output);
+  }
+}
+
+TEST(Socket, Broadcast3) {
+  ListeningSocket s(PORT);
+  std::list<ConnectedSocket> connections;
+  for (uint32_t input = 0; input < 128; input++) {
+    std::future<RWSocket&> outF = std::async(&ListeningSocket::accept, &s);
+    connections.emplace_back(IP, PORT);
+    outF.get();// make async return
+    uint32_t network_format = htonl(input);
+    s.broadcast(&network_format, sizeof(uint32_t));
+    for (ConnectedSocket& connection : connections) {
+      uint32_t output;
+      connection.read(&output, sizeof(uint32_t));
+      output = ntohl(output);
+      EXPECT_EQ(input, output);
+    }
   }
 }
 

@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <cstring>
 #include <iostream>
+#include <list>
 #include <system_error>
 #include <string>
 #include <sys/socket.h>
@@ -31,6 +32,7 @@ class SocketBase {
       if (close(sockfd) == -1)
         std::cerr << "WARNING: socket close failed: " << std::strerror(errno) << std::endl;
     }
+    SocketBase(const SocketBase&) = delete; // don't copy because it will close the file descriptor
 };
 
 class RWSocket : protected SocketBase {
@@ -74,7 +76,7 @@ class ConnectedSocket final : private RWSocket {
 
 class ListeningSocket final : private SocketBase {
   private:
-    std::vector<RWSocket> connections;
+    std::list<RWSocket> connections;
   public:
     ListeningSocket(short port) {
       sockaddr_in addr;
@@ -100,6 +102,11 @@ class ListeningSocket final : private SocketBase {
         throw std::system_error(errno, std::generic_category(), "socket accept failed");
       connections.emplace_back(confd);
       return connections.back();
+    }
+    void broadcast(const void* buf, size_t count) {
+      for (RWSocket& connection : connections) {
+        connection.write(buf, count);
+      }
     }
 };
 
