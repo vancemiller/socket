@@ -3,6 +3,7 @@
 
 #include <cerrno>
 #include <cstring>
+#include <iostream>
 #include <system_error>
 #include <string>
 #include <sys/socket.h>
@@ -32,31 +33,14 @@ class SocketBase {
     }
 };
 
-class ReadOnlySocket final : private SocketBase {
+class RWSocket : protected SocketBase {
+  protected:
+    RWSocket(void) {}
   public:
-    ReadOnlySocket(const char* address, short port) {
-      sockaddr_in addr;
-      addr.sin_family = AF_INET;
-      addr.sin_port = htons(port);
-      if (!inet_aton(address, &addr.sin_addr))
-        throw std::runtime_error("invalid address");
-      if (connect(sockfd, (sockaddr*)&addr, sizeof(sockaddr_in)) == -1)
-        throw std::system_error(errno, std::generic_category(), "socket connect failed");
-    }
-    ~ReadOnlySocket(void) {
-      if (shutdown(sockfd, SHUT_RDWR) == -1)
-        std::cerr << "WARNING: socket shutdown failed: " << std::strerror(errno) << std::endl;
-    }
-    void read(void* buf, size_t count) {
-      if (::read(this->sockfd, buf, count) == -1)
-        throw std::system_error(errno, std::generic_category(), "socket read failed");
-    }
-};
-
-class ReadWriteSocket final : private SocketBase {
+    RWSocket(int sockfd) : SocketBase(sockfd) {}
+    // this constructor shouldn't be public but it needs a special allocator or
+    // must be public for emplace to work
   public:
-    ReadWriteSocket(int sockfd) : SocketBase(sockfd) {}
-
     void write(const void* buf, size_t count) {
       if (::write(this->sockfd, buf, count) == -1)
         throw std::system_error(errno, std::generic_category(), "socket write failed");
@@ -67,11 +51,32 @@ class ReadWriteSocket final : private SocketBase {
     }
 };
 
-class Socket final : private SocketBase {
-  private:
-    std::vector<ReadWriteSocket> connections;
+class ConnectedSocket final : private RWSocket {
   public:
-    Socket(short port) {
+    ConnectedSocket(const char* address, short port) {
+      sockaddr_in addr;
+      addr.sin_family = AF_INET;
+      addr.sin_port = htons(port);
+      if (!inet_aton(address, &addr.sin_addr))
+        throw std::runtime_error("invalid address");
+      if (connect(sockfd, (sockaddr*)&addr, sizeof(sockaddr_in)) == -1)
+        throw std::system_error(errno, std::generic_category(), "socket connect failed");
+    }
+    ~ConnectedSocket(void) {
+      if (shutdown(sockfd, SHUT_RDWR) == -1)
+        std::cerr << "WARNING: socket shutdown failed: " << std::strerror(errno) << std::endl;
+    }
+    void read(void* buf, size_t count) {
+      if (::read(this->sockfd, buf, count) == -1)
+        throw std::system_error(errno, std::generic_category(), "socket read failed");
+    }
+};
+
+class ListeningSocket final : private SocketBase {
+  private:
+    std::vector<RWSocket> connections;
+  public:
+    ListeningSocket(short port) {
       sockaddr_in addr;
       addr.sin_family = AF_INET;
       addr.sin_port = htons(port);
@@ -81,11 +86,11 @@ class Socket final : private SocketBase {
       if (listen(this->sockfd, BACKLOG) == -1)
         throw std::system_error(errno, std::generic_category(), "socket listen failed");
     }
-    ~Socket(void) {
+    ~ListeningSocket(void) {
       if (shutdown(sockfd, SHUT_RDWR) == -1)
         std::cerr << "WARNING: socket shutdown failed: " << std::strerror(errno) << std::endl;
     }
-    ReadWriteSocket& accept(void) {
+    RWSocket& accept(void) {
       sockaddr_in connection;
       int connection_size = sizeof(sockaddr_in);
       int confd = ::accept(sockfd, (sockaddr*) &connection, (socklen_t*) &connection_size);
