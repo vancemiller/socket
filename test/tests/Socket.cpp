@@ -16,19 +16,19 @@ TEST(Socket, TwoSameAddress) {
 
 TEST(Socket, Connect) {
   ListeningSocket s(PORT);
-  std::future<RWSocket&> outF = std::async(&ListeningSocket::accept, &s);
+  std::future<std::shared_ptr<RWSocket>> outF = std::async(&ListeningSocket::accept, &s, -1);
   ConnectedSocket in(IP, PORT);
   outF.get();
 }
 
 TEST(Socket, SendReceive1) {
   ListeningSocket s(PORT);
-  std::future<RWSocket&> outF = std::async(&ListeningSocket::accept, &s);
+  std::future<std::shared_ptr<RWSocket>> outF = std::async(&ListeningSocket::accept, &s, -1);
   ConnectedSocket in(IP, PORT);
-  RWSocket& out = outF.get();
+  std::shared_ptr<RWSocket> out = outF.get();
   for (uint32_t input = 0; input < 0xabcd; input++) {
     uint32_t network_format = htonl(input);
-    out.write(&network_format, sizeof(uint32_t));
+    out->write(&network_format, sizeof(uint32_t));
     uint32_t output;
     in.read(&output, sizeof(uint32_t));
     output = ntohl(output);
@@ -38,16 +38,16 @@ TEST(Socket, SendReceive1) {
 
 TEST(Socket, SendReceive2) {
   ListeningSocket s(PORT);
-  std::future<RWSocket&> outF1 = std::async(&ListeningSocket::accept, &s);
+  std::future<std::shared_ptr<RWSocket>> outF1 = std::async(&ListeningSocket::accept, &s, -1);
   ConnectedSocket in1(IP, PORT);
-  RWSocket& out1 = outF1.get();
-  std::future<RWSocket&> outF2 = std::async(&ListeningSocket::accept, &s);
+  std::shared_ptr<RWSocket> out1 = outF1.get();
+  std::future<std::shared_ptr<RWSocket>> outF2 = std::async(&ListeningSocket::accept, &s, -1);
   ConnectedSocket in2(IP, PORT);
-  RWSocket& out2 = outF2.get();
+  std::shared_ptr<RWSocket> out2 = outF2.get();
   for (uint32_t input = 0; input < 0xabcd; input++) {
     uint32_t network_format = htonl(input);
-    out1.write(&network_format, sizeof(uint32_t));
-    out2.write(&network_format, sizeof(uint32_t));
+    out1->write(&network_format, sizeof(uint32_t));
+    out2->write(&network_format, sizeof(uint32_t));
     uint32_t output;
     in1.read(&output, sizeof(uint32_t));
     output = ntohl(output);
@@ -60,7 +60,7 @@ TEST(Socket, SendReceive2) {
 
 TEST(Socket, Broadcast1) {
   ListeningSocket s(PORT);
-  std::future<RWSocket&> outF = std::async(&ListeningSocket::accept, &s);
+  std::future<std::shared_ptr<RWSocket>> outF = std::async(&ListeningSocket::accept, &s, -1);
   ConnectedSocket in(IP, PORT);
   outF.get();// make async return
   for (uint32_t input = 0; input < 0xabcd; input++) {
@@ -75,10 +75,10 @@ TEST(Socket, Broadcast1) {
 
 TEST(Socket, Broadcast2) {
   ListeningSocket s(PORT);
-  std::future<RWSocket&> outF1 = std::async(&ListeningSocket::accept, &s);
+  std::future<std::shared_ptr<RWSocket>> outF1 = std::async(&ListeningSocket::accept, &s, -1);
   ConnectedSocket in1(IP, PORT);
   outF1.get();// make async return
-  std::future<RWSocket&> outF2 = std::async(&ListeningSocket::accept, &s);
+  std::future<std::shared_ptr<RWSocket>> outF2 = std::async(&ListeningSocket::accept, &s, -1);
   ConnectedSocket in2(IP, PORT);
   outF2.get();// make async return
   for (uint32_t input = 0; input < 0xabcd; input++) {
@@ -98,7 +98,7 @@ TEST(Socket, Broadcast3) {
   ListeningSocket s(PORT);
   std::list<ConnectedSocket> connections;
   for (uint32_t input = 0; input < 128; input++) {
-    std::future<RWSocket&> outF = std::async(&ListeningSocket::accept, &s);
+    std::future<std::shared_ptr<RWSocket>> outF = std::async(&ListeningSocket::accept, &s, -1);
     connections.emplace_back(IP, PORT);
     outF.get();// make async return
     uint32_t network_format = htonl(input);

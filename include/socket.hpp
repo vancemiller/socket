@@ -1,12 +1,14 @@
 #ifndef SOCKET_HPP
 #define SOCKET_HPP
 
+#include <cassert>
 #include <cerrno>
 #include <cstring>
 #include <iostream>
 #include <list>
 #include <system_error>
 #include <string>
+#include <sys/epoll.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 
@@ -61,7 +63,21 @@ class ConnectedSocket final : private RWSocket {
       addr.sin_port = htons(port);
       if (!inet_aton(address, &addr.sin_addr))
         throw std::runtime_error("invalid address");
-      if (connect(sockfd, (sockaddr*)&addr, sizeof(sockaddr_in)) == -1)
+      int err = connect(sockfd, (sockaddr*)&addr, sizeof(sockaddr_in));
+      /*if (err == -1 && errno == EINPROGRESS) {
+        fd_set writefds;
+        FD_ZERO(&writefds);
+        FD_SET(sockfd, &writefds);
+        if (select(1, NULL, &writefds, NULL,  NULL) == -1)
+          throw std::system_error(errno, std::generic_category(), "socket select failed");
+        socklen_t len = sizeof(int);
+        if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &err, &len) == -1)
+          throw std::system_error(errno, std::generic_category(), "socket getsockopt failed");
+        if (len != sizeof(int))
+          throw std::runtime_error("socket getsockopt failed");
+        // now err is properly set
+      }*/
+      if (err == -1)
         throw std::system_error(errno, std::generic_category(), "socket connect failed");
     }
     ~ConnectedSocket(void) {
@@ -76,9 +92,13 @@ class ConnectedSocket final : private RWSocket {
 
 class ListeningSocket final : private SocketBase {
   private:
-    std::list<RWSocket> connections;
+    int epfd;
+    epoll_event ev;
+    std::list<std::shared_ptr<RWSocket>> connections;
   public:
-    ListeningSocket(short port) {
+    ListeningSocket(short port) : epfd(epoll_create(1)) {
+      if (epfd == -1)
+        throw std::system_error(errno, std::generic_category(), "epoll create failed");
       sockaddr_in addr;
       addr.sin_family = AF_INET;
       addr.sin_port = htons(port);
@@ -87,25 +107,36 @@ class ListeningSocket final : private SocketBase {
         throw std::system_error(errno, std::generic_category(), "socket bind failed");
       if (listen(this->sockfd, BACKLOG) == -1)
         throw std::system_error(errno, std::generic_category(), "socket listen failed");
+      this->ev.events = EPOLLIN;
+      if (epoll_ctl(epfd, EPOLL_CTL_ADD, sockfd, &ev) == -1)
+        throw std::system_error(errno, std::generic_category(), "epoll_ctl failed");
     }
     ~ListeningSocket(void) {
       if (shutdown(sockfd, SHUT_RDWR) == -1)
         std::cerr << "WARNING: socket shutdown failed: " << std::strerror(errno) << std::endl;
+      close(epfd);
     }
-    RWSocket& accept(void) {
+    std::shared_ptr<RWSocket> accept(int timeout_ms) {
+      epoll_event ev;
+      int ret = epoll_wait(epfd, &ev, 1, timeout_ms);
+      if (ret == -1)
+        throw std::system_error(errno, std::generic_category(), "epoll wait failed");
+      if (ret == 0) // timeout
+        return nullptr;
+      assert(ret == 1);
       sockaddr_in connection;
       int connection_size = sizeof(sockaddr_in);
       int confd = ::accept(sockfd, (sockaddr*) &connection, (socklen_t*) &connection_size);
       if (connection_size != sizeof(sockaddr_in))
         throw std::runtime_error("Connection is incorrect type. It is not sockaddr_in.");
       if (confd == -1)
-        throw std::system_error(errno, std::generic_category(), "socket accept failed");
-      connections.emplace_back(confd);
+          throw std::system_error(errno, std::generic_category(), "socket accept failed");
+      connections.emplace_back(std::make_shared<RWSocket>(confd));
       return connections.back();
     }
     void broadcast(const void* buf, size_t count) {
-      for (RWSocket& connection : connections) {
-        connection.write(buf, count);
+      for (std::shared_ptr<RWSocket>& connection : connections) {
+        connection->write(buf, count);
       }
     }
 };
