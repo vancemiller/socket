@@ -110,6 +110,8 @@ class ListeningSocket final : private SocketBase {
     std::shared_ptr<RWSocket> accept(int timeout_ms) {
       epoll_event ev;
       int ret = epoll_wait(epfd, &ev, 1, timeout_ms);
+      if (ret == -1 && errno == EINTR) // interrupted, treat it like a timeout
+        return nullptr;
       if (ret == -1)
         throw std::system_error(errno, std::generic_category(), "epoll wait failed");
       if (ret == 0) // timeout
