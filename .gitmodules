@@ -1,0 +1,3 @@
+[submodule "lock"]
+	path = lock
+	url = https://github.com/vancemiller/lock.git
