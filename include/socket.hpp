@@ -114,6 +114,7 @@ class ListeningSocket final : private SocketBase {
       close(epfd);
     }
     std::shared_ptr<RWSocket> accept(int timeout_ms) {
+      std::lock_guard<Mutex> lock(mutex);
       epoll_event ev;
       int ret = epoll_wait(epfd, &ev, 1, timeout_ms);
       if (ret == -1 && errno == EINTR) // interrupted, treat it like a timeout
@@ -130,7 +131,6 @@ class ListeningSocket final : private SocketBase {
         throw std::runtime_error("Connection is incorrect type. It is not sockaddr_in.");
       if (confd == -1)
           throw std::system_error(errno, std::generic_category(), "socket accept failed");
-      std::lock_guard<Mutex> lock(mutex);
       _connections.emplace_back(std::make_shared<RWSocket>(confd));
       return _connections.back();
     }
