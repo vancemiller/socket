@@ -1,14 +1,18 @@
 #ifndef SOCKET_HPP
 #define SOCKET_HPP
 
+#include "lock.hpp"
+
 #include <cassert>
 #include <cerrno>
 #include <cstring>
 #include <iostream>
 #include <list>
+#include <mutex>
 #include <system_error>
 #include <string>
 #include <sys/epoll.h>
+#include <sys/types.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 
@@ -63,21 +67,7 @@ class ConnectedSocket final : private RWSocket {
       addr.sin_port = htons(port);
       if (!inet_aton(address, &addr.sin_addr))
         throw std::runtime_error("invalid address");
-      int err = connect(sockfd, (sockaddr*)&addr, sizeof(sockaddr_in));
-      /*if (err == -1 && errno == EINPROGRESS) {
-        fd_set writefds;
-        FD_ZERO(&writefds);
-        FD_SET(sockfd, &writefds);
-        if (select(1, NULL, &writefds, NULL,  NULL) == -1)
-          throw std::system_error(errno, std::generic_category(), "socket select failed");
-        socklen_t len = sizeof(int);
-        if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &err, &len) == -1)
-          throw std::system_error(errno, std::generic_category(), "socket getsockopt failed");
-        if (len != sizeof(int))
-          throw std::runtime_error("socket getsockopt failed");
-        // now err is properly set
-      }*/
-      if (err == -1)
+      if (connect(sockfd, (sockaddr*)&addr, sizeof(sockaddr_in)) == -1)
         throw std::system_error(errno, std::generic_category(), "socket connect failed");
     }
     ~ConnectedSocket(void) {
@@ -95,6 +85,7 @@ class ListeningSocket final : private SocketBase {
     int epfd;
     epoll_event ev;
     std::list<std::shared_ptr<RWSocket>> connections;
+    Mutex mutex;
   public:
     ListeningSocket(short port) : epfd(epoll_create(1)) {
       if (epfd == -1)
@@ -117,6 +108,7 @@ class ListeningSocket final : private SocketBase {
       close(epfd);
     }
     std::shared_ptr<RWSocket> accept(int timeout_ms) {
+      std::lock_guard<Mutex> lock(mutex);
       epoll_event ev;
       int ret = epoll_wait(epfd, &ev, 1, timeout_ms);
       if (ret == -1)
@@ -135,6 +127,7 @@ class ListeningSocket final : private SocketBase {
       return connections.back();
     }
     void broadcast(const void* buf, size_t count) {
+      std::lock_guard<Mutex> lock(mutex);
       for (std::shared_ptr<RWSocket>& connection : connections) {
         connection->write(buf, count);
       }
