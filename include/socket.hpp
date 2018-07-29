@@ -18,10 +18,6 @@
 
 #define BACKLOG 16
 
-class Serializable { };
-
-class Deserializable { };
-
 class SocketBase {
   protected:
     const int sockfd;
@@ -161,21 +157,28 @@ class ListeningSocket final : private SocketBase {
 
     size_t connections(void) const noexcept { return _connections.size(); }
 
+
     bool remove_disconnected(int timeout_ms) {
-      epoll_event ev;
-      int ret = epoll_wait(connections_epfd, &ev, 1, timeout_ms);
+      const int N_EVENTS = 16;
+      epoll_event ev[N_EVENTS];
+      int ret = epoll_wait(connections_epfd, ev, N_EVENTS, timeout_ms);
       if ((ret == -1 && errno == EINTR) || ret == 0) // interrupted or timeout
         return false;
       if (ret == -1)
         throw std::system_error(errno, std::generic_category(), "epoll wait failed");
-      assert(ret == 1);
-      assert(ev.events & EPOLLRDHUP);
       // remove connection with ev.data.fd from _connections
-      if (epoll_ctl(connections_epfd, EPOLL_CTL_DEL, ev.data.fd, NULL) == -1)
-        throw std::system_error(errno, std::generic_category(), "epoll_ctl failed");
+
+      for (int i = 0; i < ret; i++) {
+        assert(ev[i].events & EPOLLRDHUP);
+        if (epoll_ctl(connections_epfd, EPOLL_CTL_DEL, ev[i].data.fd, NULL) == -1)
+          throw std::system_error(errno, std::generic_category(), "epoll_ctl failed");
+      }
       std::lock_guard<Mutex> lock(mutex);
-      _connections.remove_if([&ev] (const std::shared_ptr<RWSocket>& c) -> bool {
-          return c->sockfd == ev.data.fd;
+      _connections.remove_if([&ev, &ret] (const std::shared_ptr<RWSocket>& c) -> bool {
+          for (int i = 0; i < ret; i++)
+            if (c->sockfd == ev[i].data.fd)
+              return true;
+        return false;
       });
       return true;
     }
