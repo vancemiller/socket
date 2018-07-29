@@ -50,7 +50,7 @@ class RWSocket : protected SocketBase {
     // must be public for emplace to work
   public:
     void write(const void* buf, size_t count) {
-      int ret = ::write(this->sockfd, buf, count);
+      int ret = ::send(this->sockfd, buf, count, MSG_NOSIGNAL);
       if (ret == -1)
         throw std::system_error(errno, std::generic_category(), "socket write failed");
       if (ret != (int) count)
@@ -136,8 +136,14 @@ class ListeningSocket final : private SocketBase {
     }
     void broadcast(const void* buf, size_t count) {
       std::lock_guard<Mutex> lock(mutex);
-      for (std::shared_ptr<RWSocket>& connection : _connections) {
-        connection->write(buf, count);
+      for (std::list<std::shared_ptr<RWSocket>>::iterator c = _connections.begin();
+          c != _connections.end(); ) {
+        try {
+          (*c)->write(buf, count);
+          c++;
+        } catch (const std::system_error& e) {
+          c = _connections.erase(c);
+        }
       }
     }
     size_t connections(void) const noexcept { return _connections.size(); }

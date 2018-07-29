@@ -5,6 +5,7 @@
 
 #define IP "127.0.0.1"
 #define PORT 8888
+
 TEST(Socket, ConstructDestruct) {
   ListeningSocket(PORT);
 }
@@ -109,6 +110,21 @@ TEST(Socket, Broadcast3) {
       output = ntohl(output);
       EXPECT_EQ(input, output);
     }
+  }
+}
+
+TEST(Socket, Disconnect) {
+  ListeningSocket s(PORT);
+  for (uint32_t n_connections = 0; n_connections < 2048; n_connections++) {
+    std::future<std::shared_ptr<RWSocket>> outF = std::async(&ListeningSocket::accept, &s, -1);
+    ConnectedSocket c(IP, PORT);
+    outF.get();
+    uint32_t network_format = htonl(n_connections);
+    s.broadcast(&network_format, sizeof(uint32_t));
+    uint32_t output;
+    c.read(&output, sizeof(uint32_t));
+    output = ntohl(output);
+    EXPECT_EQ(n_connections, output);
   }
 }
 
