@@ -41,7 +41,10 @@ class SocketBase {
     SocketBase(const SocketBase&) = delete; // don't copy because it will close the file descriptor
 };
 
+class ListeningSocket;
+
 class RWSocket : protected SocketBase {
+  friend class ListeningSocket;
   protected:
     RWSocket(void) {}
   public:
@@ -88,13 +91,13 @@ class ConnectedSocket final : private RWSocket {
 
 class ListeningSocket final : private SocketBase {
   private:
-    int epfd;
-    epoll_event ev;
+    int listen_epfd;
+    int connections_epfd;
     std::list<std::shared_ptr<RWSocket>> _connections;
     Mutex mutex;
   public:
-    ListeningSocket(short port) : epfd(epoll_create(1)) {
-      if (epfd == -1)
+    ListeningSocket(short port) : listen_epfd(epoll_create(1)), connections_epfd(epoll_create(1)) {
+      if (listen_epfd == -1 || connections_epfd == -1)
         throw std::system_error(errno, std::generic_category(), "epoll create failed");
       sockaddr_in addr;
       addr.sin_family = AF_INET;
@@ -104,36 +107,45 @@ class ListeningSocket final : private SocketBase {
         throw std::system_error(errno, std::generic_category(), "socket bind failed");
       if (listen(this->sockfd, BACKLOG) == -1)
         throw std::system_error(errno, std::generic_category(), "socket listen failed");
-      this->ev.events = EPOLLIN;
-      if (epoll_ctl(epfd, EPOLL_CTL_ADD, sockfd, &ev) == -1)
+      epoll_event ev;
+      ev.events = EPOLLIN;
+      ev.data.fd = sockfd;
+      if (epoll_ctl(listen_epfd, EPOLL_CTL_ADD, sockfd, &ev) == -1)
         throw std::system_error(errno, std::generic_category(), "epoll_ctl failed");
     }
     ~ListeningSocket(void) {
       if (shutdown(sockfd, SHUT_RDWR) == -1)
         std::cerr << "WARNING: socket shutdown failed: " << std::strerror(errno) << std::endl;
-      close(epfd);
+      close(connections_epfd);
+      close(listen_epfd);
     }
     std::shared_ptr<RWSocket> accept(int timeout_ms) {
       std::lock_guard<Mutex> lock(mutex);
       epoll_event ev;
-      int ret = epoll_wait(epfd, &ev, 1, timeout_ms);
-      if (ret == -1 && errno == EINTR) // interrupted, treat it like a timeout
+      int ret = epoll_wait(listen_epfd, &ev, 1, timeout_ms);
+      if ((ret == -1 && errno == EINTR) || ret == 0) // interrupted or timeout
         return nullptr;
       if (ret == -1)
         throw std::system_error(errno, std::generic_category(), "epoll wait failed");
-      if (ret == 0) // timeout
-        return nullptr;
       assert(ret == 1);
+      assert(ev.events & EPOLLIN);
       sockaddr_in connection;
       int connection_size = sizeof(sockaddr_in);
       int confd = ::accept(sockfd, (sockaddr*) &connection, (socklen_t*) &connection_size);
       if (connection_size != sizeof(sockaddr_in))
         throw std::runtime_error("Connection is incorrect type. It is not sockaddr_in.");
       if (confd == -1)
-          throw std::system_error(errno, std::generic_category(), "socket accept failed");
+        throw std::system_error(errno, std::generic_category(), "socket accept failed");
+      assert(ev.data.fd == sockfd);
       _connections.emplace_back(std::make_shared<RWSocket>(confd));
+      epoll_event con_ev;
+      con_ev.events = EPOLLRDHUP;
+      con_ev.data.fd = confd;
+      if (epoll_ctl(connections_epfd, EPOLL_CTL_ADD, confd, &con_ev) == -1)
+        throw std::system_error(errno, std::generic_category(), "epoll_ctl failed");
       return _connections.back();
     }
+
     void broadcast(const void* buf, size_t count) {
       std::lock_guard<Mutex> lock(mutex);
       for (std::list<std::shared_ptr<RWSocket>>::iterator c = _connections.begin();
@@ -146,7 +158,26 @@ class ListeningSocket final : private SocketBase {
         }
       }
     }
+
     size_t connections(void) const noexcept { return _connections.size(); }
+
+    bool remove_disconnected(int timeout_ms) {
+      epoll_event ev;
+      int ret = epoll_wait(connections_epfd, &ev, 1, timeout_ms);
+      if ((ret == -1 && errno == EINTR) || ret == 0) // interrupted or timeout
+        return false;
+      if (ret == -1)
+        throw std::system_error(errno, std::generic_category(), "epoll wait failed");
+      assert(ret == 1);
+      assert(ev.events & EPOLLRDHUP);
+      // remove connection with ev.data.fd from _connections
+      _connections.remove_if([&ev] (const std::shared_ptr<RWSocket>& c) -> bool {
+          return c->sockfd != ev.data.fd;
+      });
+      if (epoll_ctl(connections_epfd, EPOLL_CTL_DEL, ev.data.fd, NULL) == -1)
+        throw std::system_error(errno, std::generic_category(), "epoll_ctl failed");
+      return true;
+    }
 };
 
 #endif

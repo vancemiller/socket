@@ -116,6 +116,10 @@ TEST(Socket, Broadcast3) {
 TEST(Socket, Disconnect) {
   ListeningSocket s(PORT);
   for (uint32_t n_connections = 0; n_connections < 2048; n_connections++) {
+    if (n_connections > 0) {
+      std::future<bool> disF = std::async(&ListeningSocket::remove_disconnected, &s, -1);
+      disF.get();
+    }
     std::future<std::shared_ptr<RWSocket>> outF = std::async(&ListeningSocket::accept, &s, -1);
     ConnectedSocket c(IP, PORT);
     outF.get();
