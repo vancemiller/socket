@@ -50,12 +50,18 @@ class RWSocket : protected SocketBase {
     // must be public for emplace to work
   public:
     void write(const void* buf, size_t count) {
-      if (::write(this->sockfd, buf, count) == -1)
+      int ret = ::write(this->sockfd, buf, count);
+      if (ret == -1)
         throw std::system_error(errno, std::generic_category(), "socket write failed");
+      if (ret != (int) count)
+        throw std::runtime_error("write did not write all the bytes");
     }
     void read(void* buf, size_t count) {
-      if (::read(this->sockfd, buf, count) == -1)
+      int ret = ::read(this->sockfd, buf, count);
+      if (ret == -1)
         throw std::system_error(errno, std::generic_category(), "socket read failed");
+      if (ret != (int) count)
+        throw std::runtime_error("read did not read all the bytes");
     }
 };
 
@@ -84,7 +90,7 @@ class ListeningSocket final : private SocketBase {
   private:
     int epfd;
     epoll_event ev;
-    std::list<std::shared_ptr<RWSocket>> connections;
+    std::list<std::shared_ptr<RWSocket>> _connections;
     Mutex mutex;
   public:
     ListeningSocket(short port) : epfd(epoll_create(1)) {
@@ -125,15 +131,16 @@ class ListeningSocket final : private SocketBase {
       if (confd == -1)
           throw std::system_error(errno, std::generic_category(), "socket accept failed");
       std::lock_guard<Mutex> lock(mutex);
-      connections.emplace_back(std::make_shared<RWSocket>(confd));
-      return connections.back();
+      _connections.emplace_back(std::make_shared<RWSocket>(confd));
+      return _connections.back();
     }
     void broadcast(const void* buf, size_t count) {
       std::lock_guard<Mutex> lock(mutex);
-      for (std::shared_ptr<RWSocket>& connection : connections) {
+      for (std::shared_ptr<RWSocket>& connection : _connections) {
         connection->write(buf, count);
       }
     }
+    size_t connections(void) const noexcept { return _connections.size(); }
 };
 
 #endif
