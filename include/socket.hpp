@@ -120,7 +120,6 @@ class ListeningSocket final : private SocketBase {
       close(listen_epfd);
     }
     std::shared_ptr<RWSocket> accept(int timeout_ms) {
-      std::lock_guard<Mutex> lock(mutex);
       epoll_event ev;
       int ret = epoll_wait(listen_epfd, &ev, 1, timeout_ms);
       if ((ret == -1 && errno == EINTR) || ret == 0) // interrupted or timeout
@@ -137,12 +136,13 @@ class ListeningSocket final : private SocketBase {
       if (confd == -1)
         throw std::system_error(errno, std::generic_category(), "socket accept failed");
       assert(ev.data.fd == sockfd);
-      _connections.emplace_back(std::make_shared<RWSocket>(confd));
       epoll_event con_ev;
       con_ev.events = EPOLLRDHUP;
       con_ev.data.fd = confd;
       if (epoll_ctl(connections_epfd, EPOLL_CTL_ADD, confd, &con_ev) == -1)
         throw std::system_error(errno, std::generic_category(), "epoll_ctl failed");
+      std::lock_guard<Mutex> lock(mutex);
+      _connections.emplace_back(std::make_shared<RWSocket>(confd));
       return _connections.back();
     }
 
@@ -171,11 +171,12 @@ class ListeningSocket final : private SocketBase {
       assert(ret == 1);
       assert(ev.events & EPOLLRDHUP);
       // remove connection with ev.data.fd from _connections
-      _connections.remove_if([&ev] (const std::shared_ptr<RWSocket>& c) -> bool {
-          return c->sockfd != ev.data.fd;
-      });
       if (epoll_ctl(connections_epfd, EPOLL_CTL_DEL, ev.data.fd, NULL) == -1)
         throw std::system_error(errno, std::generic_category(), "epoll_ctl failed");
+      std::lock_guard<Mutex> lock(mutex);
+      _connections.remove_if([&ev] (const std::shared_ptr<RWSocket>& c) -> bool {
+          return c->sockfd == ev.data.fd;
+      });
       return true;
     }
 };
