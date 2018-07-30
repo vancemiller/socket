@@ -15,6 +15,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#include <unistd.h>
 
 #define BACKLOG 16
 
@@ -80,8 +81,18 @@ class ConnectedSocket final : private RWSocket {
         std::cerr << "WARNING: socket shutdown failed: " << std::strerror(errno) << std::endl;
     }
     void read(void* buf, size_t count) {
-      if (::read(this->sockfd, buf, count) == -1)
+      if (::read(sockfd, buf, count) == -1)
         throw std::system_error(errno, std::generic_category(), "socket read failed");
+    }
+    std::string get_ip(void) {
+      sockaddr_in name;
+      socklen_t name_size = sizeof(name);
+      if (getsockname(sockfd, (sockaddr*) &name, &name_size) == -1)
+        throw std::system_error(errno, std::generic_category(), "getsockname failed");
+      char* dst = (char*) malloc(sizeof(char) * INET_ADDRSTRLEN);
+      if (inet_ntop(AF_INET, &name.sin_addr, dst, INET_ADDRSTRLEN) != dst)
+        throw std::system_error(errno, std::generic_category(), "inet_ntop failed");
+      return std::string(dst);
     }
 };
 
@@ -125,8 +136,8 @@ class ListeningSocket final : private SocketBase {
       assert(ret == 1);
       assert(ev.events & EPOLLIN);
       sockaddr_in connection;
-      int connection_size = sizeof(sockaddr_in);
-      int confd = ::accept(sockfd, (sockaddr*) &connection, (socklen_t*) &connection_size);
+      socklen_t connection_size = sizeof(sockaddr_in);
+      int confd = ::accept(sockfd, (sockaddr*) &connection, &connection_size);
       if (connection_size != sizeof(sockaddr_in))
         throw std::runtime_error("Connection is incorrect type. It is not sockaddr_in.");
       if (confd == -1)
