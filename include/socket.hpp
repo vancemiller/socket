@@ -62,7 +62,8 @@ class ConnectedSocket final : protected SocketBase {
 
     ~ConnectedSocket(void) {
       if (shutdown(sockfd, SHUT_RDWR) == -1)
-        std::cerr << "WARNING: socket shutdown failed: " << std::strerror(errno) << std::endl;
+        if (errno != ENOTCONN) // ok to shut down a disconnected socket
+          std::cerr << "WARNING: socket shutdown failed: " << std::strerror(errno) << std::endl;
     }
 
     std::string get_ip(void) {

@@ -116,10 +116,7 @@ TEST(Socket, Broadcast3) {
 TEST(Socket, Disconnect) {
   ListeningSocket s(PORT);
   for (uint32_t n_connections = 0; n_connections < 2048; n_connections++) {
-    if (n_connections > 0) {
-      std::future<bool> disF = std::async(&ListeningSocket::remove_disconnected, &s, -1);
-      disF.get();
-    }
+    if (n_connections > 0) s.remove_disconnected(-1);
     std::future<std::shared_ptr<ConnectedSocket>> outF = std::async(&ListeningSocket::accept, &s, -1);
     ConnectedSocket c(IP, PORT);
     outF.get();
@@ -129,6 +126,32 @@ TEST(Socket, Disconnect) {
     c.read(&output, sizeof(uint32_t));
     output = ntohl(output);
     EXPECT_EQ(n_connections, output);
+  }
+}
+
+TEST(Socket, Disconnect2) {
+  const int n_connections = 128;
+  ListeningSocket s(PORT);
+  for (uint32_t i = 0; i < 16; i++) {
+    if (i > 0) s.remove_disconnected(-1);
+    std::vector<std::unique_ptr<ConnectedSocket>> connections;
+    for (uint32_t n = 0; n < n_connections; n++) {
+      std::future<std::shared_ptr<ConnectedSocket>> outF = std::async(&ListeningSocket::accept, &s, -1);
+      connections.emplace_back(std::make_unique<ConnectedSocket>(IP, PORT));
+      outF.get();
+    }
+    uint32_t network_format = htonl(i);
+    s.broadcast(&network_format, sizeof(uint32_t));
+    for (uint32_t n = 0; n < n_connections; n++) {
+      if (n % 2) {
+        connections[n].reset(); // close connection
+        continue;
+      }
+      uint32_t output;
+      connections[n]->read(&output, sizeof(uint32_t));
+      output = ntohl(output);
+      EXPECT_EQ(i, output);
+    }
   }
 }
 
