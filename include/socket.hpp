@@ -57,7 +57,7 @@ class RWSocket : protected SocketBase {
         throw std::runtime_error("write did not write all the bytes");
     }
     void read(void* buf, size_t count) {
-      int ret = ::read(this->sockfd, buf, count);
+      int ret = ::read(sockfd, buf, count);
       if (ret == -1)
         throw std::system_error(errno, std::generic_category(), "socket read failed");
       if (ret != (int) count)
@@ -65,7 +65,7 @@ class RWSocket : protected SocketBase {
     }
 };
 
-class ConnectedSocket final : private RWSocket {
+class ConnectedSocket final : public RWSocket {
   public:
     ConnectedSocket(const char* address, short port) {
       sockaddr_in addr;
@@ -79,10 +79,6 @@ class ConnectedSocket final : private RWSocket {
     ~ConnectedSocket(void) {
       if (shutdown(sockfd, SHUT_RDWR) == -1)
         std::cerr << "WARNING: socket shutdown failed: " << std::strerror(errno) << std::endl;
-    }
-    void read(void* buf, size_t count) {
-      if (::read(sockfd, buf, count) == -1)
-        throw std::system_error(errno, std::generic_category(), "socket read failed");
     }
     std::string get_ip(void) {
       sockaddr_in name;
@@ -167,7 +163,6 @@ class ListeningSocket final : private SocketBase {
     }
 
     size_t connections(void) const noexcept { return _connections.size(); }
-
 
     bool remove_disconnected(int timeout_ms) {
       const int N_EVENTS = 16;
