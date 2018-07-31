@@ -30,42 +30,25 @@ class SocketBase {
       bool value = true;
       if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &value, sizeof(int)) == -1)
         throw std::system_error(errno, std::generic_category(), "socket setsockopt failed");
-    };
+    }
+
     virtual ~SocketBase(void) {
       if (close(sockfd) == -1)
         std::cerr << "WARNING: socket close failed: " << std::strerror(errno) << std::endl;
     }
-    SocketBase(const SocketBase&) = delete; // don't copy because it will close the file descriptor
+
+    // don't copy because the destructor will close the file descriptor
+    SocketBase(const SocketBase&) = delete;
 };
 
 class ListeningSocket;
 
-class RWSocket : protected SocketBase {
+class ConnectedSocket final : protected SocketBase {
   friend class ListeningSocket;
-  protected:
-    RWSocket(void) {}
   public:
-    RWSocket(int sockfd) : SocketBase(sockfd) {}
-    // this constructor shouldn't be public but it needs a special allocator or
-    // must be public for emplace to work
-  public:
-    void write(const void* buf, size_t count) {
-      int ret = ::send(this->sockfd, buf, count, MSG_NOSIGNAL);
-      if (ret == -1)
-        throw std::system_error(errno, std::generic_category(), "socket write failed");
-      if (ret != (int) count)
-        throw std::runtime_error("write did not write all the bytes");
-    }
-    void read(void* buf, size_t count) {
-      int ret = ::read(sockfd, buf, count);
-      if (ret == -1)
-        throw std::system_error(errno, std::generic_category(), "socket read failed");
-      if (ret != (int) count)
-        throw std::runtime_error("read did not read all the bytes");
-    }
-};
-
-class ConnectedSocket final : public RWSocket {
+    ConnectedSocket(int sockfd) : SocketBase(sockfd) {}
+    // this constructor shouldn't be public but ConnectedNeeds needs a special allocator or
+    // a public constructor for emplace to work
   public:
     ConnectedSocket(const char* address, short port) {
       sockaddr_in addr;
@@ -76,10 +59,12 @@ class ConnectedSocket final : public RWSocket {
       if (connect(sockfd, (sockaddr*)&addr, sizeof(sockaddr_in)) == -1)
         throw std::system_error(errno, std::generic_category(), "socket connect failed");
     }
+
     ~ConnectedSocket(void) {
       if (shutdown(sockfd, SHUT_RDWR) == -1)
         std::cerr << "WARNING: socket shutdown failed: " << std::strerror(errno) << std::endl;
     }
+
     std::string get_ip(void) {
       sockaddr_in name;
       socklen_t name_size = sizeof(name);
@@ -90,13 +75,29 @@ class ConnectedSocket final : public RWSocket {
         throw std::system_error(errno, std::generic_category(), "inet_ntop failed");
       return std::string(dst);
     }
+
+    void read(void* buf, size_t count) {
+      int ret = ::read(sockfd, buf, count);
+      if (ret == -1)
+        throw std::system_error(errno, std::generic_category(), "socket read failed");
+      if (ret != (int) count)
+        throw std::runtime_error("read did not read all the bytes");
+    }
+
+    void write(const void* buf, size_t count) {
+      int ret = ::send(this->sockfd, buf, count, MSG_NOSIGNAL);
+      if (ret == -1)
+        throw std::system_error(errno, std::generic_category(), "socket write failed");
+      if (ret != (int) count)
+        throw std::runtime_error("write did not write all the bytes");
+    }
 };
 
 class ListeningSocket final : private SocketBase {
   private:
     int listen_epfd;
     int connections_epfd;
-    std::list<std::shared_ptr<RWSocket>> _connections;
+    std::list<std::shared_ptr<ConnectedSocket>> _connections;
     Mutex mutex;
   public:
     ListeningSocket(short port) : listen_epfd(epoll_create(1)), connections_epfd(epoll_create(1)) {
@@ -116,13 +117,15 @@ class ListeningSocket final : private SocketBase {
       if (epoll_ctl(listen_epfd, EPOLL_CTL_ADD, sockfd, &ev) == -1)
         throw std::system_error(errno, std::generic_category(), "epoll_ctl failed");
     }
+
     ~ListeningSocket(void) {
       if (shutdown(sockfd, SHUT_RDWR) == -1)
         std::cerr << "WARNING: socket shutdown failed: " << std::strerror(errno) << std::endl;
       close(connections_epfd);
       close(listen_epfd);
     }
-    std::shared_ptr<RWSocket> accept(int timeout_ms) {
+
+    std::shared_ptr<ConnectedSocket> accept(int timeout_ms) {
       epoll_event ev;
       int ret = epoll_wait(listen_epfd, &ev, 1, timeout_ms);
       if ((ret == -1 && errno == EINTR) || ret == 0) // interrupted or timeout
@@ -145,13 +148,13 @@ class ListeningSocket final : private SocketBase {
       if (epoll_ctl(connections_epfd, EPOLL_CTL_ADD, confd, &con_ev) == -1)
         throw std::system_error(errno, std::generic_category(), "epoll_ctl failed");
       std::lock_guard<Mutex> lock(mutex);
-      _connections.emplace_back(std::make_shared<RWSocket>(confd));
+      _connections.emplace_back(std::make_shared<ConnectedSocket>(confd));
       return _connections.back();
     }
 
     void broadcast(const void* buf, size_t count) {
       std::lock_guard<Mutex> lock(mutex);
-      for (std::list<std::shared_ptr<RWSocket>>::iterator c = _connections.begin();
+      for (std::list<std::shared_ptr<ConnectedSocket>>::iterator c = _connections.begin();
           c != _connections.end(); ) {
         try {
           (*c)->write(buf, count);
@@ -180,7 +183,7 @@ class ListeningSocket final : private SocketBase {
           throw std::system_error(errno, std::generic_category(), "epoll_ctl failed");
       }
       std::lock_guard<Mutex> lock(mutex);
-      _connections.remove_if([&ev, &ret] (const std::shared_ptr<RWSocket>& c) -> bool {
+      _connections.remove_if([&ev, &ret] (const std::shared_ptr<ConnectedSocket>& c) -> bool {
           for (int i = 0; i < ret; i++)
             if (c->sockfd == ev[i].data.fd)
               return true;
@@ -191,4 +194,3 @@ class ListeningSocket final : private SocketBase {
 };
 
 #endif
-
