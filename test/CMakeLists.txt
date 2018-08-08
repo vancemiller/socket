@@ -11,4 +11,3 @@ add_executable(${PROJECT_NAME} test-runner.cpp ${TESTS})
 target_link_libraries(${PROJECT_NAME} ${GTEST_LIBRARY} rt socket)
 
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD COMMAND ${PROJECT_NAME})
-
