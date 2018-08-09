@@ -17,14 +17,17 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 
+namespace wrapper {
+namespace socket {
+
 #define BACKLOG 16
 
-class SocketBase {
+class Base {
   protected:
     const int sockfd;
-    SocketBase(int sockfd): sockfd(sockfd) {}
+    Base(int sockfd): sockfd(sockfd) {}
   public:
-    SocketBase(void) : SocketBase(socket(AF_INET, SOCK_STREAM, 0)) {
+    Base(void) : Base(::socket(AF_INET, SOCK_STREAM, 0)) {
       if (sockfd == -1)
         throw std::system_error(errno, std::generic_category(), "socket creation failed");
       bool value = true;
@@ -32,25 +35,25 @@ class SocketBase {
         throw std::system_error(errno, std::generic_category(), "socket setsockopt failed");
     }
 
-    virtual ~SocketBase(void) {
+    virtual ~Base(void) {
       if (close(sockfd) == -1)
         std::cerr << "WARNING: socket close failed: " << std::strerror(errno) << std::endl;
     }
 
     // don't copy because the destructor will close the file descriptor
-    SocketBase(const SocketBase&) = delete;
+    Base(const Base&) = delete;
 };
 
-class ListeningSocket;
+class Listening;
 
-class ConnectedSocket final : protected SocketBase {
-  friend class ListeningSocket;
+class Connected final : protected Base {
+  friend class Listening;
   public:
-    ConnectedSocket(int sockfd) : SocketBase(sockfd) {}
+    Connected(int sockfd) : Base(sockfd) {}
     // this constructor shouldn't be public but ConnectedNeeds needs a special allocator or
     // a public constructor for emplace to work
   public:
-    ConnectedSocket(const char* address, short port) {
+    Connected(const char* address, short port) {
       sockaddr_in addr;
       addr.sin_family = AF_INET;
       addr.sin_port = htons(port);
@@ -60,7 +63,7 @@ class ConnectedSocket final : protected SocketBase {
         throw std::system_error(errno, std::generic_category(), "socket connect failed");
     }
 
-    ~ConnectedSocket(void) {
+    ~Connected(void) {
       if (shutdown(sockfd, SHUT_RDWR) == -1)
         if (errno != ENOTCONN) // ok to shut down a disconnected socket
           std::cerr << "WARNING: socket shutdown failed: " << std::strerror(errno) << std::endl;
@@ -94,14 +97,14 @@ class ConnectedSocket final : protected SocketBase {
     }
 };
 
-class ListeningSocket final : private SocketBase {
+class Listening final : private Base {
   private:
     int listen_epfd;
     int connections_epfd;
-    std::list<std::shared_ptr<ConnectedSocket>> _connections;
+    std::list<std::shared_ptr<Connected>> _connections;
     Mutex mutex;
   public:
-    ListeningSocket(short port) : listen_epfd(epoll_create(1)), connections_epfd(epoll_create(1)) {
+    Listening(short port) : listen_epfd(epoll_create(1)), connections_epfd(epoll_create(1)) {
       if (listen_epfd == -1 || connections_epfd == -1)
         throw std::system_error(errno, std::generic_category(), "epoll create failed");
       sockaddr_in addr;
@@ -119,14 +122,14 @@ class ListeningSocket final : private SocketBase {
         throw std::system_error(errno, std::generic_category(), "epoll_ctl failed");
     }
 
-    ~ListeningSocket(void) {
+    ~Listening(void) {
       if (shutdown(sockfd, SHUT_RDWR) == -1)
         std::cerr << "WARNING: socket shutdown failed: " << std::strerror(errno) << std::endl;
       close(connections_epfd);
       close(listen_epfd);
     }
 
-    std::shared_ptr<ConnectedSocket> accept(int timeout_ms) {
+    std::shared_ptr<Connected> accept(int timeout_ms) {
       epoll_event ev;
       int ret = epoll_wait(listen_epfd, &ev, 1, timeout_ms);
       if ((ret == -1 && errno == EINTR) || ret == 0) // interrupted or timeout
@@ -149,13 +152,13 @@ class ListeningSocket final : private SocketBase {
       if (epoll_ctl(connections_epfd, EPOLL_CTL_ADD, confd, &con_ev) == -1)
         throw std::system_error(errno, std::generic_category(), "epoll_ctl failed");
       std::lock_guard<Mutex> lock(mutex);
-      _connections.emplace_back(std::make_shared<ConnectedSocket>(confd));
+      _connections.emplace_back(std::make_shared<Connected>(confd));
       return _connections.back();
     }
 
     void broadcast(const void* buf, size_t count) {
       std::lock_guard<Mutex> lock(mutex);
-      for (std::list<std::shared_ptr<ConnectedSocket>>::iterator c = _connections.begin();
+      for (std::list<std::shared_ptr<Connected>>::iterator c = _connections.begin();
           c != _connections.end(); ) {
         try {
           (*c)->write(buf, count);
@@ -184,7 +187,7 @@ class ListeningSocket final : private SocketBase {
           throw std::system_error(errno, std::generic_category(), "epoll_ctl failed");
       }
       std::lock_guard<Mutex> lock(mutex);
-      _connections.remove_if([&ev, &ret] (const std::shared_ptr<ConnectedSocket>& c) -> bool {
+      _connections.remove_if([&ev, &ret] (const std::shared_ptr<Connected>& c) -> bool {
           for (int i = 0; i < ret; i++)
             if (c->sockfd == ev[i].data.fd)
               return true;
@@ -193,5 +196,6 @@ class ListeningSocket final : private SocketBase {
       return true;
     }
 };
-
+} // namespace socket
+} // namespace wrapper
 #endif
