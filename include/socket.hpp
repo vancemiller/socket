@@ -23,8 +23,9 @@ namespace socket {
 #define BACKLOG 16
 
 class Base {
+  private:
+    int sockfd;
   protected:
-    const int sockfd;
     Base(int sockfd): sockfd(sockfd) {}
   public:
     Base(void) : Base(::socket(AF_INET, SOCK_STREAM, 0)) {
@@ -36,12 +37,17 @@ class Base {
     }
 
     virtual ~Base(void) {
-      if (close(sockfd) == -1)
+      if (sockfd != -1 && close(sockfd) == -1)
         std::cerr << "WARNING: socket close failed: " << std::strerror(errno) << std::endl;
     }
 
-    // don't copy because the destructor will close the file descriptor
+    // Delete copy constructors
+    Base(Base&) = delete;
     Base(const Base&) = delete;
+    // Define move constructor
+    Base(Base&& o) : sockfd(o.sockfd) { o.sockfd = -1; }
+  protected:
+    int fd(void) { return sockfd; }
 };
 
 class Listening;
@@ -59,20 +65,22 @@ class Connected final : protected Base {
       addr.sin_port = htons(port);
       if (!inet_aton(address, &addr.sin_addr))
         throw std::runtime_error("invalid address");
-      if (connect(sockfd, (sockaddr*)&addr, sizeof(sockaddr_in)) == -1)
+      if (connect(fd(), (sockaddr*)&addr, sizeof(sockaddr_in)) == -1)
         throw std::system_error(errno, std::generic_category(), "socket connect failed");
     }
 
     ~Connected(void) {
-      if (shutdown(sockfd, SHUT_RDWR) == -1)
+      if (fd() != -1 && shutdown(fd(), SHUT_RDWR) == -1)
         if (errno != ENOTCONN) // ok to shut down a disconnected socket
           std::cerr << "WARNING: socket shutdown failed: " << std::strerror(errno) << std::endl;
     }
 
+    Connected(Connected&& o) : Base(std::move(o)) {}
+
     std::string get_ip(void) {
       sockaddr_in name;
       socklen_t name_size = sizeof(name);
-      if (getsockname(sockfd, (sockaddr*) &name, &name_size) == -1)
+      if (getsockname(fd(), (sockaddr*) &name, &name_size) == -1)
         throw std::system_error(errno, std::generic_category(), "getsockname failed");
       char* dst = (char*) malloc(sizeof(char) * INET_ADDRSTRLEN);
       if (inet_ntop(AF_INET, &name.sin_addr, dst, INET_ADDRSTRLEN) != dst)
@@ -81,7 +89,7 @@ class Connected final : protected Base {
     }
 
     void read(void* buf, size_t count) {
-      int ret = ::read(sockfd, buf, count);
+      int ret = ::read(fd(), buf, count);
       if (ret == -1)
         throw std::system_error(errno, std::generic_category(), "socket read failed");
       if (ret != (int) count)
@@ -89,7 +97,7 @@ class Connected final : protected Base {
     }
 
     void write(const void* buf, size_t count) {
-      int ret = ::send(this->sockfd, buf, count, MSG_NOSIGNAL);
+      int ret = ::send(this->fd(), buf, count, MSG_NOSIGNAL);
       if (ret == -1)
         throw std::system_error(errno, std::generic_category(), "socket write failed");
       if (ret != (int) count)
@@ -111,22 +119,31 @@ class Listening final : private Base {
       addr.sin_family = AF_INET;
       addr.sin_port = htons(port);
       addr.sin_addr.s_addr = INADDR_ANY; // Automatically select an IP address
-      if (bind(sockfd, (sockaddr*)&addr, sizeof(sockaddr_in)) == -1)
+      if (bind(fd(), (sockaddr*)&addr, sizeof(sockaddr_in)) == -1)
         throw std::system_error(errno, std::generic_category(), "socket bind failed");
-      if (listen(this->sockfd, BACKLOG) == -1)
+      if (listen(this->fd(), BACKLOG) == -1)
         throw std::system_error(errno, std::generic_category(), "socket listen failed");
       epoll_event ev;
       ev.events = EPOLLIN;
-      ev.data.fd = sockfd;
-      if (epoll_ctl(listen_epfd, EPOLL_CTL_ADD, sockfd, &ev) == -1)
+      ev.data.fd = fd();
+      if (epoll_ctl(listen_epfd, EPOLL_CTL_ADD, fd(), &ev) == -1)
         throw std::system_error(errno, std::generic_category(), "epoll_ctl failed");
     }
 
     ~Listening(void) {
-      if (shutdown(sockfd, SHUT_RDWR) == -1)
-        std::cerr << "WARNING: socket shutdown failed: " << std::strerror(errno) << std::endl;
-      close(connections_epfd);
-      close(listen_epfd);
+      if (fd() != -1) {
+        if (shutdown(fd(), SHUT_RDWR) == -1)
+          std::cerr << "WARNING: socket shutdown failed: " << std::strerror(errno) << std::endl;
+        close(connections_epfd);
+        close(listen_epfd);
+      }
+    }
+
+    Listening(Listening&& o) : Base(std::move(o)), listen_epfd(o.listen_epfd),
+        connections_epfd(o.connections_epfd), _connections(std::move(o._connections)),
+        mutex(std::move(o.mutex)) {
+      o.listen_epfd = -1;
+      o.connections_epfd = -1;
     }
 
     std::shared_ptr<Connected> accept(int timeout_ms) {
@@ -140,12 +157,12 @@ class Listening final : private Base {
       assert(ev.events & EPOLLIN);
       sockaddr_in connection;
       socklen_t connection_size = sizeof(sockaddr_in);
-      int confd = ::accept(sockfd, (sockaddr*) &connection, &connection_size);
+      int confd = ::accept(fd(), (sockaddr*) &connection, &connection_size);
       if (connection_size != sizeof(sockaddr_in))
         throw std::runtime_error("Connection is incorrect type. It is not sockaddr_in.");
       if (confd == -1)
         throw std::system_error(errno, std::generic_category(), "socket accept failed");
-      assert(ev.data.fd == sockfd);
+      assert(ev.data.fd == fd());
       epoll_event con_ev;
       con_ev.events = EPOLLRDHUP;
       con_ev.data.fd = confd;
@@ -189,7 +206,7 @@ class Listening final : private Base {
       std::lock_guard<Mutex> lock(mutex);
       _connections.remove_if([&ev, &ret] (const std::shared_ptr<Connected>& c) -> bool {
           for (int i = 0; i < ret; i++)
-            if (c->sockfd == ev[i].data.fd)
+            if (c->fd() == ev[i].data.fd)
               return true;
         return false;
       });

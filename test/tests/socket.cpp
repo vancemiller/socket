@@ -25,6 +25,25 @@ TEST(Socket, Connect) {
   outF.get();
 }
 
+TEST(Socket, Move) {
+  Listening s(PORT);
+  Listening s2 = std::move(s);
+  EXPECT_THROW(s.accept(-1), std::runtime_error);
+  std::future<std::shared_ptr<Connected>> outF = std::async(&Listening::accept, &s2, -1);
+  Connected in(IP, PORT);
+  outF.get();
+}
+
+TEST(Socket, Move2) {
+  Listening s(PORT);
+  Listening s2 = std::move(s);
+  EXPECT_THROW(s.accept(-1), std::runtime_error);
+  std::future<std::shared_ptr<Connected>> outF = std::async(&Listening::accept, &s2, -1);
+  Connected in(IP, PORT);
+  outF.get();
+  Connected in2(std::move(in));
+}
+
 TEST(Socket, SendReceive1) {
   Listening s(PORT);
   std::future<std::shared_ptr<Connected>> outF = std::async(&Listening::accept, &s, -1);
@@ -163,5 +182,6 @@ TEST(Socket, DetectIP) {
   std::cout << "Detect IP returned: " << my_ip << std::endl;
   EXPECT_NE("", my_ip);
 }
+
 } // namespace socket
 } // namespace wrapper
