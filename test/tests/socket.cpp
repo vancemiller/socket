@@ -158,10 +158,8 @@ TEST(Socket, Disconnect2) {
   }
 }
 
-#define DEFAULT_CONNECT_IP "8.8.8.8"
-#define DEFAULT_CONNECT_PORT 53
 TEST(Socket, DetectIP) {
-  std::string my_ip  = Connected(DEFAULT_CONNECT_IP, DEFAULT_CONNECT_PORT).get_ip();
+  std::string my_ip  = get_my_ip();
   std::cout << "Detect IP returned: " << my_ip << std::endl;
   EXPECT_NE("", my_ip);
 }

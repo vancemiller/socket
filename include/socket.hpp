@@ -196,6 +196,12 @@ class Listening final : private Base {
       return true;
     }
 };
+
+#define DEFAULT_CONNECT_IP "8.8.8.8"
+#define DEFAULT_CONNECT_PORT 53
+std::string get_my_ip(void) {
+  return Connected(DEFAULT_CONNECT_IP, DEFAULT_CONNECT_PORT).get_ip();
+}
 } // namespace socket
 } // namespace wrapper
 #endif
