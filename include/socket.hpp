@@ -8,6 +8,7 @@
 #include <cstring>
 #include <iostream>
 #include <list>
+#include <memory>
 #include <mutex>
 #include <system_error>
 #include <string>
