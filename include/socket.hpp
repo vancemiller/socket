@@ -90,19 +90,23 @@ class Connected final : protected Base {
     }
 
     void read(void* buf, size_t count) {
-      int ret = ::read(fd(), buf, count);
-      if (ret == -1)
-        throw std::system_error(errno, std::generic_category(), "socket read failed");
-      if (ret != (int) count)
-        throw std::runtime_error("read did not read all the bytes");
+      size_t received = 0;
+      do {
+        int ret = ::read(fd(), &((char*) buf)[received], count - received);
+        if (ret == -1)
+          throw std::system_error(errno, std::generic_category(), "socket read failed");
+        received += ret;
+      } while(received < count);
     }
 
     void write(const void* buf, size_t count) {
-      int ret = ::send(this->fd(), buf, count, MSG_NOSIGNAL);
-      if (ret == -1)
-        throw std::system_error(errno, std::generic_category(), "socket write failed");
-      if (ret != (int) count)
-        throw std::runtime_error("write did not write all the bytes");
+      size_t sent = 0;
+      do {
+        int ret = ::send(this->fd(), &((char*) buf)[sent], count - sent, MSG_NOSIGNAL);
+        if (ret == -1)
+          throw std::system_error(errno, std::generic_category(), "socket write failed");
+        sent += ret;
+      } while (sent < count);
     }
 };
 
