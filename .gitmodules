@@ -1,3 +1,6 @@
 [submodule "lock"]
 	path = lock
 	url = https://github.com/vancemiller/lock.git
+[submodule "file-descriptor"]
+	path = file-descriptor
+	url = https://github.com/vancemiller/file-descriptor

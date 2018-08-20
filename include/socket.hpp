@@ -2,6 +2,7 @@
 #define SOCKET_HPP
 
 #include "lock.hpp"
+#include "file_descriptor.hpp"
 
 #include <cassert>
 #include <cerrno>
@@ -25,30 +26,27 @@ namespace socket {
 
 class Base {
   private:
-    int sockfd;
+    FileDescriptor sockfd;
   protected:
-    Base(int sockfd): sockfd(sockfd) {}
+    Base(FileDescriptor&& sockfd): sockfd(std::move(sockfd)) {}
   public:
     Base(void) : Base(::socket(AF_INET, SOCK_STREAM, 0)) {
       if (sockfd == -1)
         throw std::system_error(errno, std::generic_category(), "socket creation failed");
       bool value = true;
-      if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &value, sizeof(int)) == -1)
+      if (setsockopt(sockfd.get(), SOL_SOCKET, SO_REUSEADDR, &value, sizeof(int)) == -1)
         throw std::system_error(errno, std::generic_category(), "socket setsockopt failed");
     }
 
-    virtual ~Base(void) {
-      if (sockfd != -1 && close(sockfd) == -1)
-        std::cerr << "WARNING: socket close failed: " << std::strerror(errno) << std::endl;
-    }
+    virtual ~Base(void) {}
 
     // Delete copy constructors
     Base(Base&) = delete;
     Base(const Base&) = delete;
     // Define move constructor
-    Base(Base&& o) : sockfd(o.sockfd) { o.sockfd = -1; }
+    Base(Base&& o) : sockfd(std::move(o.sockfd)) {}
   protected:
-    int fd(void) { return sockfd; }
+    int fd(void) { return sockfd.get(); }
 };
 
 class Listening;
@@ -56,7 +54,7 @@ class Listening;
 class Connected final : protected Base {
   friend class Listening;
   public:
-    Connected(int sockfd) : Base(sockfd) {}
+    Connected(FileDescriptor&& sockfd) : Base(std::move(sockfd)) {}
     // this constructor shouldn't be public but ConnectedNeeds needs a special allocator or
     // a public constructor for emplace to work
   public:
@@ -102,7 +100,7 @@ class Connected final : protected Base {
     void write(const void* buf, size_t count) {
       size_t sent = 0;
       do {
-        int ret = ::send(this->fd(), &((char*) buf)[sent], count - sent, MSG_NOSIGNAL);
+        int ret = ::send(fd(), &((char*) buf)[sent], count - sent, MSG_NOSIGNAL);
         if (ret == -1)
           throw std::system_error(errno, std::generic_category(), "socket write failed");
         sent += ret;
@@ -112,8 +110,8 @@ class Connected final : protected Base {
 
 class Listening final : private Base {
   private:
-    int listen_epfd;
-    int connections_epfd;
+    FileDescriptor listen_epfd;
+    FileDescriptor connections_epfd;
     std::list<std::shared_ptr<Connected>> _connections;
     Mutex mutex;
   public:
@@ -126,34 +124,28 @@ class Listening final : private Base {
       addr.sin_addr.s_addr = INADDR_ANY; // Automatically select an IP address
       if (bind(fd(), (sockaddr*)&addr, sizeof(sockaddr_in)) == -1)
         throw std::system_error(errno, std::generic_category(), "socket bind failed");
-      if (listen(this->fd(), BACKLOG) == -1)
+      if (listen(fd(), BACKLOG) == -1)
         throw std::system_error(errno, std::generic_category(), "socket listen failed");
       epoll_event ev;
       ev.events = EPOLLIN;
       ev.data.fd = fd();
-      if (epoll_ctl(listen_epfd, EPOLL_CTL_ADD, fd(), &ev) == -1)
+      if (epoll_ctl(listen_epfd.get(), EPOLL_CTL_ADD, fd(), &ev) == -1)
         throw std::system_error(errno, std::generic_category(), "epoll_ctl failed");
     }
 
     ~Listening(void) {
-      if (fd() != -1) {
+      if (fd() != -1)
         if (shutdown(fd(), SHUT_RDWR) == -1)
           std::cerr << "WARNING: socket shutdown failed: " << std::strerror(errno) << std::endl;
-        close(connections_epfd);
-        close(listen_epfd);
-      }
     }
 
-    Listening(Listening&& o) : Base(std::move(o)), listen_epfd(o.listen_epfd),
-        connections_epfd(o.connections_epfd), _connections(std::move(o._connections)),
-        mutex(std::move(o.mutex)) {
-      o.listen_epfd = -1;
-      o.connections_epfd = -1;
-    }
+    Listening(Listening&& o) : Base(std::move(o)), listen_epfd(std::move(o.listen_epfd)),
+        connections_epfd(std::move(o.connections_epfd)), _connections(std::move(o._connections)),
+        mutex(std::move(o.mutex)) {}
 
     std::shared_ptr<Connected> accept(int timeout_ms) {
       epoll_event ev;
-      int ret = epoll_wait(listen_epfd, &ev, 1, timeout_ms);
+      int ret = epoll_wait(listen_epfd.get(), &ev, 1, timeout_ms);
       if ((ret == -1 && errno == EINTR) || ret == 0) // interrupted or timeout
         return nullptr;
       if (ret == -1)
@@ -171,7 +163,7 @@ class Listening final : private Base {
       epoll_event con_ev;
       con_ev.events = EPOLLRDHUP;
       con_ev.data.fd = confd;
-      if (epoll_ctl(connections_epfd, EPOLL_CTL_ADD, confd, &con_ev) == -1)
+      if (epoll_ctl(connections_epfd.get(), EPOLL_CTL_ADD, confd, &con_ev) == -1)
         throw std::system_error(errno, std::generic_category(), "epoll_ctl failed");
       std::lock_guard<Mutex> lock(mutex);
       _connections.emplace_back(std::make_shared<Connected>(confd));
@@ -196,7 +188,7 @@ class Listening final : private Base {
     bool remove_disconnected(int timeout_ms) {
       const int N_EVENTS = 16;
       epoll_event ev[N_EVENTS];
-      int ret = epoll_wait(connections_epfd, ev, N_EVENTS, timeout_ms);
+      int ret = epoll_wait(connections_epfd.get(), ev, N_EVENTS, timeout_ms);
       if ((ret == -1 && errno == EINTR) || ret == 0) // interrupted or timeout
         return false;
       if (ret == -1)
@@ -205,7 +197,7 @@ class Listening final : private Base {
 
       for (int i = 0; i < ret; i++) {
         assert(ev[i].events & EPOLLRDHUP);
-        if (epoll_ctl(connections_epfd, EPOLL_CTL_DEL, ev[i].data.fd, NULL) == -1)
+        if (epoll_ctl(connections_epfd.get(), EPOLL_CTL_DEL, ev[i].data.fd, NULL) == -1)
           throw std::system_error(errno, std::generic_category(), "epoll_ctl failed");
       }
       std::lock_guard<Mutex> lock(mutex);
