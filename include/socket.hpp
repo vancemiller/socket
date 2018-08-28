@@ -95,7 +95,7 @@ class Connected final : public Base {
       size_t received = 0;
       do {
         int ret = ::read(fd(), &((char*) buf)[received], count - received);
-        if (ret == -1)
+        if (ret == 0 || ret == -1)
           throw std::system_error(errno, std::generic_category(), "socket read failed");
         received += ret;
       } while(received < count);
