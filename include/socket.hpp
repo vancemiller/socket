@@ -43,7 +43,7 @@ class Base {
     Base(const Base&) = delete;
     Base(Base&& o) : sockfd(std::move(o.sockfd)) {}
 
-    bool data_available(void) {
+    bool data_available(void) const {
       pollfd fds{sockfd.get(), POLLIN, 0};
       if (poll(&fds, 1, 0) == -1)
         throw std::system_error(errno, std::generic_category(), "poll failed");
