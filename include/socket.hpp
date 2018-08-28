@@ -11,6 +11,7 @@
 #include <list>
 #include <memory>
 #include <mutex>
+#include <poll.h>
 #include <system_error>
 #include <string>
 #include <sys/epoll.h>
@@ -37,21 +38,24 @@ class Base {
       if (setsockopt(sockfd.get(), SOL_SOCKET, SO_REUSEADDR, &value, sizeof(int)) == -1)
         throw std::system_error(errno, std::generic_category(), "socket setsockopt failed");
     }
-
     virtual ~Base(void) {}
-
-    // Delete copy constructors
     Base(Base&) = delete;
     Base(const Base&) = delete;
-    // Define move constructor
     Base(Base&& o) : sockfd(std::move(o.sockfd)) {}
+
+    bool data_available(void) {
+      pollfd fds{sockfd.get(), POLLIN, 0};
+      if (poll(&fds, 1, 0) == -1)
+        throw std::system_error(errno, std::generic_category(), "poll failed");
+      return fds.revents & POLLIN;
+    }
   protected:
     int fd(void) { return sockfd.get(); }
 };
 
 class Listening;
 
-class Connected final : protected Base {
+class Connected final : public Base {
   friend class Listening;
   public:
     Connected(FileDescriptor&& sockfd) : Base(std::move(sockfd)) {}
@@ -108,7 +112,7 @@ class Connected final : protected Base {
     }
 };
 
-class Listening final : private Base {
+class Listening final : public Base {
   private:
     FileDescriptor listen_epfd;
     FileDescriptor connections_epfd;

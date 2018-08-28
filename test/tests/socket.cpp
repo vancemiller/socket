@@ -183,5 +183,22 @@ TEST(Socket, DetectIP) {
   EXPECT_NE("", my_ip);
 }
 
+TEST(Socket, DataNotAvailable) {
+  Listening s(PORT);
+  std::future<std::shared_ptr<Connected>> outF = std::async(&Listening::accept, &s, -1);
+  Connected in(IP, PORT);
+  std::shared_ptr<Connected> out = outF.get();
+  EXPECT_FALSE(in.data_available());
+}
+
+TEST(Socket, DataAvailable) {
+  Listening s(PORT);
+  std::future<std::shared_ptr<Connected>> outF = std::async(&Listening::accept, &s, -1);
+  Connected in(IP, PORT);
+  std::shared_ptr<Connected> out = outF.get();
+  uint32_t network_format = htonl(123);
+  out->write(&network_format, sizeof(uint32_t));
+  EXPECT_TRUE(in.data_available());
+}
 } // namespace socket
 } // namespace wrapper
