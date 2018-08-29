@@ -49,20 +49,8 @@ class Base {
         throw std::system_error(errno, std::generic_category(), "poll failed");
       return fds.revents & POLLIN;
     }
-
-    std::string get_ip(void) const {
-      sockaddr_in name;
-      socklen_t name_size = sizeof(name);
-      if (getsockname(fd(), (sockaddr*) &name, &name_size) == -1)
-        throw std::system_error(errno, std::generic_category(), "getsockname failed");
-      char* dst = (char*) malloc(sizeof(char) * INET_ADDRSTRLEN);
-      if (inet_ntop(AF_INET, &name.sin_addr, dst, INET_ADDRSTRLEN) != dst)
-        throw std::system_error(errno, std::generic_category(), "inet_ntop failed");
-      return std::string(dst);
-    }
-
   protected:
-    int fd(void) const { return sockfd.get(); }
+    int fd(void) { return sockfd.get(); }
 };
 
 class Listening;
@@ -91,6 +79,17 @@ class Connected final : public Base {
     }
 
     Connected(Connected&& o) : Base(std::move(o)) {}
+
+    std::string get_ip(void) {
+      sockaddr_in name;
+      socklen_t name_size = sizeof(name);
+      if (getsockname(fd(), (sockaddr*) &name, &name_size) == -1)
+        throw std::system_error(errno, std::generic_category(), "getsockname failed");
+      char* dst = (char*) malloc(sizeof(char) * INET_ADDRSTRLEN);
+      if (inet_ntop(AF_INET, &name.sin_addr, dst, INET_ADDRSTRLEN) != dst)
+        throw std::system_error(errno, std::generic_category(), "inet_ntop failed");
+      return std::string(dst);
+    }
 
     void read(void* buf, size_t count) {
       size_t received = 0;
