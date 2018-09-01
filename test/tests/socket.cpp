@@ -28,7 +28,6 @@ TEST(Socket, Connect) {
 TEST(Socket, Move) {
   Listening s(PORT);
   Listening s2 = std::move(s);
-  EXPECT_THROW(s.accept(-1), std::runtime_error);
   std::future<std::shared_ptr<Connected>> outF = std::async(&Listening::accept, &s2, -1);
   Connected in(IP, PORT);
   outF.get();
@@ -37,7 +36,6 @@ TEST(Socket, Move) {
 TEST(Socket, Move2) {
   Listening s(PORT);
   Listening s2 = std::move(s);
-  EXPECT_THROW(s.accept(-1), std::runtime_error);
   std::future<std::shared_ptr<Connected>> outF = std::async(&Listening::accept, &s2, -1);
   Connected in(IP, PORT);
   outF.get();
@@ -200,5 +198,26 @@ TEST(Socket, DataAvailable) {
   out->write(&network_format, sizeof(uint32_t));
   EXPECT_TRUE(in.data_available());
 }
+
+TEST(Socket, Timeout) {
+  Listening s(PORT);
+  std::future<std::shared_ptr<Connected>> outF = std::async(&Listening::accept, &s, -1);
+  Connected in(IP, PORT);
+  std::shared_ptr<Connected> out = outF.get();
+  uint32_t output;
+  EXPECT_FALSE(in.read(&output, sizeof(uint32_t), 10));
+}
+
+TEST(Socket, PartialTimeout) {
+  Listening s(PORT);
+  std::future<std::shared_ptr<Connected>> outF = std::async(&Listening::accept, &s, -1);
+  Connected in(IP, PORT);
+  std::shared_ptr<Connected> out = outF.get();
+  uint32_t output;
+  char d = 'a';
+  out->write(&d, sizeof(char));
+  EXPECT_FALSE(in.read(&output, sizeof(uint32_t), 10));
+}
+
 } // namespace socket
 } // namespace wrapper

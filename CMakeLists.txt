@@ -13,6 +13,8 @@ if(NOT TARGET file-descriptor)
   add_subdirectory(file-descriptor)
 endif()
 
+file(GLOB srcs src/*.cpp)
 add_library(${PROJECT_NAME} INTERFACE)
 target_include_directories(${PROJECT_NAME} INTERFACE include)
+target_sources(${PROJECT_NAME} INTERFACE ${srcs})
 target_link_libraries(${PROJECT_NAME} INTERFACE lock file-descriptor)
