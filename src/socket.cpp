@@ -3,6 +3,22 @@
 namespace wrapper {
 namespace socket {
 
+Address::Address(const std::pair<std::string, short>& address) : address(address) {}
+
+Address::Address(const std::string& ip, short port) : Address(std::make_pair(ip, port)) {}
+
+const std::string& Address::ip(void) const { return address.first; }
+
+const short Address::port(void) const { return address.second; }
+
+bool Address::operator==(const Address& o) const { return address == o.address; }
+
+bool Address::operator!=(const Address& o) const { return !(address == o.address); }
+
+std::ostream& operator<<(std::ostream& os, const Address& a) {
+  return os << a.ip() << ":" << std::to_string(a.port());
+}
+
 Base::Base(FileDescriptor&& sockfd) : sockfd(std::move(sockfd)) {}
 
 Base::Base(void) : Base(::socket(AF_INET, SOCK_STREAM, 0)) {
@@ -28,11 +44,11 @@ int Base::fd(void) const { return sockfd.get(); }
 
 Connected::Connected(FileDescriptor&& sockfd) : Base(std::move(sockfd)) {}
 
-Connected::Connected(const char* address, short port) {
+Connected::Connected(const Address& address) {
   sockaddr_in addr;
   addr.sin_family = AF_INET;
-  addr.sin_port = htons(port);
-  if (!inet_aton(address, &addr.sin_addr))
+  addr.sin_port = htons(address.port());
+  if (!inet_aton(address.ip().c_str(), &addr.sin_addr))
     throw std::runtime_error("invalid address");
   if (connect(fd(), (sockaddr*)&addr, sizeof(sockaddr_in)) == -1)
     throw std::system_error(errno, std::generic_category(), "socket connect failed");
@@ -187,7 +203,7 @@ bool Listening::remove_disconnected(int timeout_ms) {
 #define DEFAULT_CONNECT_IP "8.8.8.8"
 #define DEFAULT_CONNECT_PORT 53
 std::string get_my_ip(void) {
-  return Connected(DEFAULT_CONNECT_IP, DEFAULT_CONNECT_PORT).get_ip();
+  return Connected(Address(DEFAULT_CONNECT_IP, DEFAULT_CONNECT_PORT)).get_ip();
 }
 } // namespace socket
 } // namespace wrapper
