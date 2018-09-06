@@ -1,7 +1,7 @@
 #include <future>
 
 #include "gtest/gtest.h"
-#include "socket.hpp"
+#include "socket/socket.hpp"
 
 #define IP "127.0.0.1"
 #define PORT 8888
