@@ -219,5 +219,12 @@ TEST(Socket, PartialTimeout) {
   EXPECT_FALSE(in.read(&output, sizeof(uint32_t), 10));
 }
 
+TEST(Socket, Address) {
+  Listening s(PORT);
+  EXPECT_EQ(Address(get_my_ip(), PORT), s.get_address());
+  std::future<std::shared_ptr<Connected>> outF = std::async(&Listening::accept, &s, -1);
+  Connected in(Address(get_my_ip(), PORT));
+  EXPECT_EQ(s.get_address(), in.get_input_address());
+}
 } // namespace socket
 } // namespace wrapper

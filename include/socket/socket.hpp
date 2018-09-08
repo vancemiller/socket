@@ -46,9 +46,11 @@ class Listening;
 
 class Connected final : public Base {
   friend class Listening;
+  private:
+    const Address address;
   public:
-    Connected(FileDescriptor&& sockfd);
-    // this constructor shouldn't be public but ConnectedNeeds needs a special allocator or
+    Connected(const Address& address, FileDescriptor&& sockfd);
+    // this constructor shouldn't be public but Connected Needs needs a special allocator or
     // a public constructor for emplace to work
   public:
     Connected(const Address& address);
@@ -57,10 +59,12 @@ class Connected final : public Base {
     std::string get_ip(void) const;
     bool read(void* buf, size_t count, int timeout_ms=-1);
     void write(const void* buf, size_t count);
+    Address get_input_address(void) const noexcept;
 };
 
 class Listening final : public Base {
   private:
+    Address address;
     FileDescriptor listen_epfd;
     FileDescriptor connections_epfd;
     std::list<std::shared_ptr<Connected>> _connections;
@@ -73,6 +77,7 @@ class Listening final : public Base {
     void broadcast(const void* buf, size_t count);
     size_t connections(void) const noexcept;
     bool remove_disconnected(int timeout_ms=-1);
+    Address get_address(void) const noexcept;
 };
 
 std::string get_my_ip(void);
