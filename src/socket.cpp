@@ -24,8 +24,6 @@ bool Base::data_available(void) const {
   return fds.revents & POLLIN;
 }
 
-int Base::fd(void) const { return sockfd.get(); }
-
 Connected::Connected(const Address& address, FileDescriptor&& sockfd) : Base(std::move(sockfd)),
     address(address) {}
 
@@ -35,14 +33,14 @@ Connected::Connected(const Address& address) : address(address) {
   addr.sin_port = htons(address.port());
   if (!inet_aton(address.ip().c_str(), &addr.sin_addr))
     throw std::runtime_error("invalid address");
-  if (connect(fd(), (sockaddr*)&addr, sizeof(sockaddr_in)) == -1)
+  if (connect(sockfd.get(), (sockaddr*)&addr, sizeof(sockaddr_in)) == -1)
     throw std::system_error(errno, std::generic_category(), "socket connect failed");
 }
 
 Connected::Connected(Connected&& o) : Base(std::move(o)), address(o.address) {}
 
 Connected::~Connected(void) {
-  if (fd() != -1 && shutdown(fd(), SHUT_RDWR) == -1)
+  if (sockfd.get() != -1 && shutdown(sockfd.get(), SHUT_RDWR) == -1)
     if (errno != ENOTCONN) // ok to shut down a disconnected socket
       std::cerr << "WARNING: socket shutdown failed: " << std::strerror(errno) << std::endl;
 }
@@ -50,7 +48,7 @@ Connected::~Connected(void) {
 std::string Connected::get_ip(void) const {
   sockaddr_in name;
   socklen_t name_size = sizeof(name);
-  if (getsockname(fd(), (sockaddr*) &name, &name_size) == -1)
+  if (getsockname(sockfd.get(), (sockaddr*) &name, &name_size) == -1)
     throw std::system_error(errno, std::generic_category(), "getsockname failed");
   if (name_size > sizeof(name))
     throw std::runtime_error("getsockname returned more bytes than sockaddr_in can hold");
@@ -69,10 +67,10 @@ bool Connected::read(void* buf, size_t count, int timeout_ms) {
     timeout.tv_sec = timeout_ms / 1000;
     timeout.tv_usec = (timeout_ms % 1000) * 1000;
   }
-  setsockopt(fd(), SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeval));
+  setsockopt(sockfd.get(), SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeval));
   size_t received = 0;
   do {
-    int ret = ::read(fd(), &((char*) buf)[received], count - received);
+    int ret = ::read(sockfd.get(), &((char*) buf)[received], count - received);
     if (ret == 0 || ret == -1) {
       if (errno == EAGAIN) return false; // timed out
       throw std::system_error(errno, std::generic_category(), "socket read failed");
@@ -82,18 +80,87 @@ bool Connected::read(void* buf, size_t count, int timeout_ms) {
   return true;
 }
 
-void Connected::write(const void* buf, size_t count) {
+Address Connected::get_input_address(void) const noexcept {
+  return address;
+}
+
+Accepted::Accepted(Listening& listener) : Base([&listener] (void) -> FileDescriptor {
+      sockaddr_in addr;
+      socklen_t addr_size = sizeof(sockaddr_in);
+      FileDescriptor fd([&listener, &addr, &addr_size] (void) -> int {
+            int sockfd;
+            if ((sockfd = ::accept(listener.sockfd.get(), (sockaddr*) &addr, &addr_size)) == -1)
+              throw std::system_error(errno, std::generic_category(), "socket accept failed");
+            return sockfd;
+          }());
+      if (addr_size != sizeof(sockaddr_in))
+        throw std::runtime_error("accept returned incorrect number of bytes");
+      return fd;
+    }()), address([this] (void) -> Address {
+      sockaddr_in addr;
+      socklen_t addr_size = sizeof(sockaddr_in);
+      if (getsockname(this->sockfd.get(), (sockaddr*) &addr, &addr_size) == -1)
+        throw std::system_error(errno, std::generic_category(), "getsockname failed");
+      if (addr_size > sizeof(sockaddr_in))
+        throw std::runtime_error("getsockname returned more bytes than sockaddr_in can hold");
+      return Address{get_my_ip(), static_cast<short>(ntohs(addr.sin_port))};
+    }()), input_address([this] () -> Address {
+      sockaddr_in addr;
+      socklen_t addr_size = sizeof(sockaddr_in);
+      if (getpeername(this->sockfd.get(), (sockaddr*) &addr, &addr_size) == -1)
+        throw std::system_error(errno, std::generic_category(), "getpeername failed");
+      if (addr_size > sizeof(sockaddr_in))
+        throw std::runtime_error("getpeername returned more bytes than sockaddr_in can hold");
+      std::unique_ptr<char[]> dst(std::make_unique<char[]>(sizeof(char) * INET_ADDRSTRLEN));
+      if (inet_ntop(AF_INET, &addr.sin_addr, dst.get(), INET_ADDRSTRLEN) != dst.get())
+        throw std::system_error(errno, std::generic_category(), "inet_ntop failed");
+      return Address{std::string(dst.get()), static_cast<short>(addr.sin_port)};
+    }()) {}
+
+Accepted::Accepted(Accepted && o) : Base(std::move(o)), address(o.address),
+    input_address(o.input_address) {}
+
+Accepted::~Accepted(void) {}
+
+bool Accepted::read(void* buf, size_t count, int timeout_ms) {
+  timeval timeout;
+  if (timeout_ms == -1) {
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 0;
+  } else {
+    timeout.tv_sec = timeout_ms / 1000;
+    timeout.tv_usec = (timeout_ms % 1000) * 1000;
+  }
+  setsockopt(sockfd.get(), SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeval));
+  size_t received = 0;
+  do {
+    int ret = ::read(sockfd.get(), &((char*) buf)[received], count - received);
+    if (ret == 0 || ret == -1) {
+      if (errno == EAGAIN) return false; // timed out
+      throw std::system_error(errno, std::generic_category(), "socket read failed");
+    }
+    received += ret;
+  } while(received < count);
+  return true;
+  // TODO consolidate with Connected::read
+}
+
+void Accepted::write(const void* buf, size_t count) {
   size_t sent = 0;
   do {
-    int ret = ::send(fd(), &((char*) buf)[sent], count - sent, MSG_NOSIGNAL);
+    int ret = ::send(sockfd.get(), &((char*) buf)[sent], count - sent, MSG_NOSIGNAL);
     if (ret == -1)
       throw std::system_error(errno, std::generic_category(), "socket write failed");
     sent += ret;
   } while (sent < count);
 }
 
-Address Connected::get_input_address(void) const noexcept {
+Address Accepted::get_address(void) const noexcept {
   return address;
+}
+
+Address Accepted::get_input_address(void) const noexcept {
+  return input_address;
 }
 
 Listening::Listening(short port) : address{get_my_ip(), port}, listen_epfd(epoll_create(1)),
@@ -104,14 +171,14 @@ Listening::Listening(short port) : address{get_my_ip(), port}, listen_epfd(epoll
   addr.sin_family = AF_INET;
   addr.sin_port = htons(port);
   addr.sin_addr.s_addr = INADDR_ANY; // Automatically select an IP address
-  if (bind(fd(), (sockaddr*)&addr, sizeof(sockaddr_in)) == -1)
+  if (bind(sockfd.get(), (sockaddr*)&addr, sizeof(sockaddr_in)) == -1)
     throw std::system_error(errno, std::generic_category(), "socket bind failed");
-  if (listen(fd(), BACKLOG) == -1)
+  if (listen(sockfd.get(), BACKLOG) == -1)
     throw std::system_error(errno, std::generic_category(), "socket listen failed");
   epoll_event ev;
   ev.events = EPOLLIN;
-  ev.data.fd = fd();
-  if (epoll_ctl(listen_epfd.get(), EPOLL_CTL_ADD, fd(), &ev) == -1)
+  ev.data.fd = sockfd.get();
+  if (epoll_ctl(listen_epfd.get(), EPOLL_CTL_ADD, sockfd.get(), &ev) == -1)
     throw std::system_error(errno, std::generic_category(), "epoll_ctl failed");
 }
 
@@ -120,12 +187,12 @@ Listening::Listening(Listening&& o) : Base(std::move(o)), address(o.address),
     _connections(std::move(o._connections)), mutex(std::move(o.mutex)) {}
 
 Listening::~Listening(void) {
-  if (fd() != -1)
-    if (shutdown(fd(), SHUT_RDWR) == -1)
+  if (sockfd.get() != -1)
+    if (shutdown(sockfd.get(), SHUT_RDWR) == -1)
       std::cerr << "WARNING: socket shutdown failed: " << std::strerror(errno) << std::endl;
 }
 
-std::shared_ptr<Connected> Listening::accept(int timeout_ms) {
+std::shared_ptr<Accepted> Listening::accept(int timeout_ms) {
   epoll_event ev;
   int ret = epoll_wait(listen_epfd.get(), &ev, 1, timeout_ms);
   if ((ret == -1 && errno == EINTR) || ret == 0) // interrupted or timeout
@@ -134,37 +201,21 @@ std::shared_ptr<Connected> Listening::accept(int timeout_ms) {
     throw std::system_error(errno, std::generic_category(), "epoll wait failed");
   assert(ret == 1);
   assert(ev.events & EPOLLIN);
-  sockaddr_in connection;
-  socklen_t connection_size = sizeof(sockaddr_in);
-  int confd = ::accept(fd(), (sockaddr*) &connection, &connection_size);
-  if (connection_size != sizeof(sockaddr_in))
-    throw std::runtime_error("Connection is incorrect type. It is not sockaddr_in.");
-  if (confd == -1)
-    throw std::system_error(errno, std::generic_category(), "socket accept failed");
-  assert(ev.data.fd == fd());
+  std::shared_ptr<Accepted> accepted(std::make_shared<Accepted>(*this));
+
   epoll_event con_ev;
   con_ev.events = EPOLLRDHUP;
-  con_ev.data.fd = confd;
-  if (epoll_ctl(connections_epfd.get(), EPOLL_CTL_ADD, confd, &con_ev) == -1)
+  con_ev.data.fd = accepted->sockfd.get();
+  if (epoll_ctl(connections_epfd.get(), EPOLL_CTL_ADD, con_ev.data.fd, &con_ev) == -1)
     throw std::system_error(errno, std::generic_category(), "epoll_ctl failed");
-  sockaddr_in name;
-  socklen_t name_size = sizeof(name);
-  if (getpeername(confd, (sockaddr*) &name, &name_size) == -1)
-    throw std::system_error(errno, std::generic_category(), "getpeername failed");
-  if (name_size > sizeof(name))
-    throw std::runtime_error("getpeername returned more bytes than sockaddr_in can hold");
-  std::unique_ptr<char[]> dst(std::make_unique<char[]>(sizeof(char) * INET_ADDRSTRLEN));
-  if (inet_ntop(AF_INET, &name.sin_addr, dst.get(), INET_ADDRSTRLEN) != dst.get())
-    throw std::system_error(errno, std::generic_category(), "inet_ntop failed");
-  Address address{std::string(dst.get()), static_cast<short>(name.sin_port)};
   std::lock_guard<Mutex> lock(mutex);
-  _connections.emplace_back(std::make_shared<Connected>(address, confd));
+  _connections.emplace_back(accepted);
   return _connections.back();
 }
 
 void Listening::broadcast(const void* buf, size_t count) {
   std::lock_guard<Mutex> lock(mutex);
-  for (std::list<std::shared_ptr<Connected>>::iterator c = _connections.begin();
+  for (std::list<std::shared_ptr<Accepted>>::iterator c = _connections.begin();
       c != _connections.end(); ) {
     try {
       (*c)->write(buf, count);
@@ -193,9 +244,9 @@ bool Listening::remove_disconnected(int timeout_ms) {
       throw std::system_error(errno, std::generic_category(), "epoll_ctl failed");
   }
   std::lock_guard<Mutex> lock(mutex);
-  _connections.remove_if([&ev, &ret] (const std::shared_ptr<Connected>& c) -> bool {
+  _connections.remove_if([&ev, &ret] (const std::shared_ptr<Accepted>& c) -> bool {
       for (int i = 0; i < ret; i++)
-        if (c->fd() == ev[i].data.fd)
+        if (c->sockfd.get() == ev[i].data.fd)
           return true;
     return false;
   });

@@ -27,7 +27,7 @@ namespace socket {
 #define BACKLOG 16
 
 class Base {
-  private:
+  protected:
     FileDescriptor sockfd;
   protected:
     Base(FileDescriptor&& sockfd);
@@ -38,14 +38,11 @@ class Base {
     Base(Base&& o);
     virtual ~Base(void);
     bool data_available(void) const;
-  protected:
-    int fd(void) const;
 };
 
 class Listening;
 
 class Connected final : public Base {
-  friend class Listening;
   private:
     const Address address;
   public:
@@ -58,22 +55,37 @@ class Connected final : public Base {
     ~Connected(void);
     std::string get_ip(void) const;
     bool read(void* buf, size_t count, int timeout_ms=-1);
+    Address get_input_address(void) const noexcept;
+};
+
+class Accepted final : public Base {
+  friend class Listening;
+  private:
+    const Address address;
+    const Address input_address;
+  public:
+    Accepted(Listening& listener);
+    Accepted(Accepted && o);
+    ~Accepted(void);
+    bool read(void* buf, size_t count, int timeout_ms=-1);
     void write(const void* buf, size_t count);
+    Address get_address(void) const noexcept;
     Address get_input_address(void) const noexcept;
 };
 
 class Listening final : public Base {
+  friend class Accepted;
   private:
     Address address;
     FileDescriptor listen_epfd;
     FileDescriptor connections_epfd;
-    std::list<std::shared_ptr<Connected>> _connections;
+    std::list<std::shared_ptr<Accepted>> _connections;
     Mutex mutex;
   public:
     Listening(short port);
     Listening(Listening&& o);
     ~Listening(void);
-    std::shared_ptr<Connected> accept(int timeout_ms=-1);
+    std::shared_ptr<Accepted> accept(int timeout_ms=-1);
     void broadcast(const void* buf, size_t count);
     size_t connections(void) const noexcept;
     bool remove_disconnected(int timeout_ms=-1);
