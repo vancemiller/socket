@@ -10,12 +10,12 @@ namespace socket {
 
 class Address {
   public:
-    const std::pair<std::string, short> address;
+    const std::pair<std::string, unsigned short> address;
   public:
-    Address(const std::pair<std::string, short>& address);
-    Address(const std::string& ip, short port);
+    Address(const std::pair<std::string, unsigned short>& address);
+    Address(const std::string& ip, unsigned short port);
     const std::string& ip(void) const;
-    const short port(void) const;
+    const unsigned short port(void) const;
     bool operator==(const Address& o) const;
     bool operator!=(const Address& o) const;
 };

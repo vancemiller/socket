@@ -44,22 +44,25 @@ class Listening;
 
 class Connected : public Base {
   private:
+    const Address address;
     const Address input_address;
   protected:
-    Connected(FileDescriptor&& sockfd);
+    Connected(const Address& address, FileDescriptor&& sockfd);
   public:
     Connected(const Address& to);
     Connected(Connected&& o);
     ~Connected(void);
-    std::string get_ip(void) const;
     bool read(void* buf, size_t count, int timeout_ms=-1);
-    Address get_input_address(void) const noexcept;
+    Address get_address(void) const noexcept; // The address of the Listening socket
+    Address get_input_address(void) const noexcept; // The address of the socket returned by accept
+  public:
+    static Address get_local_address(const Connected& c);
 };
 
 class Bidirectional final : public Connected {
   friend class Listening;
   private:
-    const Address address;
+    const Address output_address;
   public:
     Bidirectional(Listening& listener);
     // This constructor shouldn't be public but is necessary for Listening to call make_unique.
@@ -67,7 +70,7 @@ class Bidirectional final : public Connected {
     Bidirectional(const Address& to);
     Bidirectional(Bidirectional&& o);
     void write(const void* buf, size_t count);
-    Address get_address(void) const noexcept;
+    Address get_output_address(void) const noexcept; // This socket's output address
 };
 
 class Listening final : public Base {
@@ -79,7 +82,7 @@ class Listening final : public Base {
     std::list<std::shared_ptr<Bidirectional>> _connections;
     Mutex mutex;
   public:
-    Listening(short port);
+    Listening(unsigned short port);
     Listening(Listening&& o);
     ~Listening(void);
     std::shared_ptr<Bidirectional> accept(int timeout_ms=-1);

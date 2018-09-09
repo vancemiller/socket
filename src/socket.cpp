@@ -24,31 +24,35 @@ bool Base::data_available(void) const {
   return fds.revents & POLLIN;
 }
 
-Connected::Connected(FileDescriptor&& sockfd) : Base(std::move(sockfd)),
-    input_address([this] () -> Address {
-      sockaddr_in addr;
-      socklen_t addr_size = sizeof(sockaddr_in);
-      if (getpeername(this->sockfd.get(), (sockaddr*) &addr, &addr_size) == -1)
-        throw std::system_error(errno, std::generic_category(), "getpeername failed");
-      if (addr_size > sizeof(sockaddr_in))
-        throw std::runtime_error("getpeername returned more bytes than sockaddr_in can hold");
-      std::unique_ptr<char[]> dst(std::make_unique<char[]>(sizeof(char) * INET_ADDRSTRLEN));
-      if (inet_ntop(AF_INET, &addr.sin_addr, dst.get(), INET_ADDRSTRLEN) != dst.get())
-        throw std::system_error(errno, std::generic_category(), "inet_ntop failed");
-      return Address{std::string(dst.get()), static_cast<short>(addr.sin_port)};
-    }()) {}
-
-Connected::Connected(const Address& to) : input_address(to) {
+static Address get_connected_address(int sockfd) {
   sockaddr_in addr;
-  addr.sin_family = AF_INET;
-  addr.sin_port = htons(input_address.port());
-  if (!inet_aton(input_address.ip().c_str(), &addr.sin_addr))
-    throw std::runtime_error("invalid address");
-  if (connect(sockfd.get(), (sockaddr*)&addr, sizeof(sockaddr_in)) == -1)
-    throw std::system_error(errno, std::generic_category(), "socket connect failed");
+  socklen_t addr_size = sizeof(sockaddr_in);
+  if (getpeername(sockfd, (sockaddr*) &addr, &addr_size) == -1)
+    throw std::system_error(errno, std::generic_category(), "getpeername failed");
+  if (addr_size > sizeof(sockaddr_in))
+    throw std::runtime_error("getpeername returned more bytes than sockaddr_in can hold");
+  std::unique_ptr<char[]> dst(std::make_unique<char[]>(sizeof(char) * INET_ADDRSTRLEN));
+  if (inet_ntop(AF_INET, &addr.sin_addr, dst.get(), INET_ADDRSTRLEN) != dst.get())
+    throw std::system_error(errno, std::generic_category(), "inet_ntop failed");
+  return Address{std::string(dst.get()), static_cast<unsigned short>(ntohs(addr.sin_port))};
 }
 
-Connected::Connected(Connected&& o) : Base(std::move(o)), input_address(o.input_address) {}
+Connected::Connected(const Address& address, FileDescriptor&& sockfd) : Base(std::move(sockfd)),
+    address(address), input_address(get_connected_address(this->sockfd.get())) {}
+
+Connected::Connected(const Address& to) : address(to), input_address([this, &to] (void) -> Address {
+      sockaddr_in addr;
+      addr.sin_family = AF_INET;
+      addr.sin_port = htons(to.port());
+      if (!inet_aton(to.ip().c_str(), &addr.sin_addr))
+        throw std::runtime_error("invalid address");
+      if (connect(sockfd.get(), (sockaddr*)&addr, sizeof(sockaddr_in)) == -1)
+        throw std::system_error(errno, std::generic_category(), "socket connect failed");
+      return get_connected_address(sockfd.get());
+    }()) {}
+
+Connected::Connected(Connected&& o) : Base(std::move(o)), address(o.address),
+    input_address(o.input_address) {}
 
 Connected::~Connected(void) {
   if (sockfd.get() != -1 && shutdown(sockfd.get(), SHUT_RDWR) == -1)
@@ -56,17 +60,17 @@ Connected::~Connected(void) {
       std::cerr << "WARNING: socket shutdown failed: " << std::strerror(errno) << std::endl;
 }
 
-std::string Connected::get_ip(void) const {
-  sockaddr_in name;
-  socklen_t name_size = sizeof(name);
-  if (getsockname(sockfd.get(), (sockaddr*) &name, &name_size) == -1)
+Address Connected::get_local_address(const Connected& c) {
+  sockaddr_in addr;
+  socklen_t addr_size = sizeof(sockaddr_in);
+  if (getsockname(c.sockfd.get(), (sockaddr*) &addr, &addr_size) == -1)
     throw std::system_error(errno, std::generic_category(), "getsockname failed");
-  if (name_size > sizeof(name))
+  if (addr_size > sizeof(sockaddr_in))
     throw std::runtime_error("getsockname returned more bytes than sockaddr_in can hold");
   std::unique_ptr<char[]> dst(std::make_unique<char[]>(sizeof(char) * INET_ADDRSTRLEN));
-  if (inet_ntop(AF_INET, &name.sin_addr, dst.get(), INET_ADDRSTRLEN) != dst.get())
+  if (inet_ntop(AF_INET, &addr.sin_addr, dst.get(), INET_ADDRSTRLEN) != dst.get())
     throw std::system_error(errno, std::generic_category(), "inet_ntop failed");
-  return std::string(dst.get());
+  return Address{std::string(dst.get()), static_cast<unsigned short>(ntohs(addr.sin_port))};
 }
 
 bool Connected::read(void* buf, size_t count, int timeout_ms) {
@@ -91,13 +95,19 @@ bool Connected::read(void* buf, size_t count, int timeout_ms) {
   return true;
 }
 
+Address Connected::get_address(void) const noexcept {
+  return address;
+}
+
 Address Connected::get_input_address(void) const noexcept {
   return input_address;
 }
 
-Bidirectional::Bidirectional(const Address& to) : Connected(to), address({"", 0}) {}
+Bidirectional::Bidirectional(const Address& to) : Connected(to),
+    output_address(Connected::get_local_address(*this)) {}
 
-Bidirectional::Bidirectional(Listening& listener) : Connected([&listener] (void) -> FileDescriptor {
+Bidirectional::Bidirectional(Listening& listener) : Connected(listener.get_address(),
+    [&listener] (void) -> FileDescriptor {
       sockaddr_in addr;
       socklen_t addr_size = sizeof(sockaddr_in);
       FileDescriptor fd([&listener, &addr, &addr_size] (void) -> int {
@@ -109,17 +119,10 @@ Bidirectional::Bidirectional(Listening& listener) : Connected([&listener] (void)
       if (addr_size != sizeof(sockaddr_in))
         throw std::runtime_error("accept returned incorrect number of bytes");
       return fd;
-    }()), address([this] (void) -> Address {
-      sockaddr_in addr;
-      socklen_t addr_size = sizeof(sockaddr_in);
-      if (getsockname(this->sockfd.get(), (sockaddr*) &addr, &addr_size) == -1)
-        throw std::system_error(errno, std::generic_category(), "getsockname failed");
-      if (addr_size > sizeof(sockaddr_in))
-        throw std::runtime_error("getsockname returned more bytes than sockaddr_in can hold");
-      return Address{get_my_ip(), static_cast<short>(ntohs(addr.sin_port))};
-    }()) {}
+    }()), output_address(Connected::get_local_address(*this)) {}
 
-Bidirectional::Bidirectional(Bidirectional && o) : Connected(std::move(o)), address(o.address) {}
+Bidirectional::Bidirectional(Bidirectional && o) : Connected(std::move(o)),
+    output_address(o.output_address) {}
 
 void Bidirectional::write(const void* buf, size_t count) {
   size_t sent = 0;
@@ -131,12 +134,12 @@ void Bidirectional::write(const void* buf, size_t count) {
   } while (sent < count);
 }
 
-Address Bidirectional::get_address(void) const noexcept {
-  return address;
+Address Bidirectional::get_output_address(void) const noexcept {
+  return output_address;
 }
 
-Listening::Listening(short port) : address{get_my_ip(), port}, listen_epfd(epoll_create(1)),
-    connections_epfd(epoll_create(1)) {
+Listening::Listening(unsigned short port) : address{get_my_ip(), port},
+    listen_epfd(epoll_create(1)), connections_epfd(epoll_create(1)) {
   if (listen_epfd == -1 || connections_epfd == -1)
     throw std::system_error(errno, std::generic_category(), "epoll create failed");
   sockaddr_in addr;
@@ -232,7 +235,8 @@ Address Listening::get_address(void) const noexcept {
 #define DEFAULT_CONNECT_IP "8.8.8.8"
 #define DEFAULT_CONNECT_PORT 53
 std::string get_my_ip(void) {
-  return Connected(Address(DEFAULT_CONNECT_IP, DEFAULT_CONNECT_PORT)).get_ip();
+  return Connected::get_local_address(Connected(
+      Address(DEFAULT_CONNECT_IP, DEFAULT_CONNECT_PORT))).ip();
 }
 } // namespace socket
 } // namespace wrapper
