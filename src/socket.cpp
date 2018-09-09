@@ -24,20 +24,31 @@ bool Base::data_available(void) const {
   return fds.revents & POLLIN;
 }
 
-Connected::Connected(const Address& address, FileDescriptor&& sockfd) : Base(std::move(sockfd)),
-    address(address) {}
+Connected::Connected(FileDescriptor&& sockfd) : Base(std::move(sockfd)),
+    input_address([this] () -> Address {
+      sockaddr_in addr;
+      socklen_t addr_size = sizeof(sockaddr_in);
+      if (getpeername(this->sockfd.get(), (sockaddr*) &addr, &addr_size) == -1)
+        throw std::system_error(errno, std::generic_category(), "getpeername failed");
+      if (addr_size > sizeof(sockaddr_in))
+        throw std::runtime_error("getpeername returned more bytes than sockaddr_in can hold");
+      std::unique_ptr<char[]> dst(std::make_unique<char[]>(sizeof(char) * INET_ADDRSTRLEN));
+      if (inet_ntop(AF_INET, &addr.sin_addr, dst.get(), INET_ADDRSTRLEN) != dst.get())
+        throw std::system_error(errno, std::generic_category(), "inet_ntop failed");
+      return Address{std::string(dst.get()), static_cast<short>(addr.sin_port)};
+    }()) {}
 
-Connected::Connected(const Address& address) : address(address) {
+Connected::Connected(const Address& to) : input_address(to) {
   sockaddr_in addr;
   addr.sin_family = AF_INET;
-  addr.sin_port = htons(address.port());
-  if (!inet_aton(address.ip().c_str(), &addr.sin_addr))
+  addr.sin_port = htons(input_address.port());
+  if (!inet_aton(input_address.ip().c_str(), &addr.sin_addr))
     throw std::runtime_error("invalid address");
   if (connect(sockfd.get(), (sockaddr*)&addr, sizeof(sockaddr_in)) == -1)
     throw std::system_error(errno, std::generic_category(), "socket connect failed");
 }
 
-Connected::Connected(Connected&& o) : Base(std::move(o)), address(o.address) {}
+Connected::Connected(Connected&& o) : Base(std::move(o)), input_address(o.input_address) {}
 
 Connected::~Connected(void) {
   if (sockfd.get() != -1 && shutdown(sockfd.get(), SHUT_RDWR) == -1)
@@ -81,10 +92,12 @@ bool Connected::read(void* buf, size_t count, int timeout_ms) {
 }
 
 Address Connected::get_input_address(void) const noexcept {
-  return address;
+  return input_address;
 }
 
-Accepted::Accepted(Listening& listener) : Base([&listener] (void) -> FileDescriptor {
+Bidirectional::Bidirectional(const Address& to) : Connected(to), address({"", 0}) {}
+
+Bidirectional::Bidirectional(Listening& listener) : Connected([&listener] (void) -> FileDescriptor {
       sockaddr_in addr;
       socklen_t addr_size = sizeof(sockaddr_in);
       FileDescriptor fd([&listener, &addr, &addr_size] (void) -> int {
@@ -104,48 +117,11 @@ Accepted::Accepted(Listening& listener) : Base([&listener] (void) -> FileDescrip
       if (addr_size > sizeof(sockaddr_in))
         throw std::runtime_error("getsockname returned more bytes than sockaddr_in can hold");
       return Address{get_my_ip(), static_cast<short>(ntohs(addr.sin_port))};
-    }()), input_address([this] () -> Address {
-      sockaddr_in addr;
-      socklen_t addr_size = sizeof(sockaddr_in);
-      if (getpeername(this->sockfd.get(), (sockaddr*) &addr, &addr_size) == -1)
-        throw std::system_error(errno, std::generic_category(), "getpeername failed");
-      if (addr_size > sizeof(sockaddr_in))
-        throw std::runtime_error("getpeername returned more bytes than sockaddr_in can hold");
-      std::unique_ptr<char[]> dst(std::make_unique<char[]>(sizeof(char) * INET_ADDRSTRLEN));
-      if (inet_ntop(AF_INET, &addr.sin_addr, dst.get(), INET_ADDRSTRLEN) != dst.get())
-        throw std::system_error(errno, std::generic_category(), "inet_ntop failed");
-      return Address{std::string(dst.get()), static_cast<short>(addr.sin_port)};
     }()) {}
 
-Accepted::Accepted(Accepted && o) : Base(std::move(o)), address(o.address),
-    input_address(o.input_address) {}
+Bidirectional::Bidirectional(Bidirectional && o) : Connected(std::move(o)), address(o.address) {}
 
-Accepted::~Accepted(void) {}
-
-bool Accepted::read(void* buf, size_t count, int timeout_ms) {
-  timeval timeout;
-  if (timeout_ms == -1) {
-    timeout.tv_sec = 0;
-    timeout.tv_usec = 0;
-  } else {
-    timeout.tv_sec = timeout_ms / 1000;
-    timeout.tv_usec = (timeout_ms % 1000) * 1000;
-  }
-  setsockopt(sockfd.get(), SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeval));
-  size_t received = 0;
-  do {
-    int ret = ::read(sockfd.get(), &((char*) buf)[received], count - received);
-    if (ret == 0 || ret == -1) {
-      if (errno == EAGAIN) return false; // timed out
-      throw std::system_error(errno, std::generic_category(), "socket read failed");
-    }
-    received += ret;
-  } while(received < count);
-  return true;
-  // TODO consolidate with Connected::read
-}
-
-void Accepted::write(const void* buf, size_t count) {
+void Bidirectional::write(const void* buf, size_t count) {
   size_t sent = 0;
   do {
     int ret = ::send(sockfd.get(), &((char*) buf)[sent], count - sent, MSG_NOSIGNAL);
@@ -155,12 +131,8 @@ void Accepted::write(const void* buf, size_t count) {
   } while (sent < count);
 }
 
-Address Accepted::get_address(void) const noexcept {
+Address Bidirectional::get_address(void) const noexcept {
   return address;
-}
-
-Address Accepted::get_input_address(void) const noexcept {
-  return input_address;
 }
 
 Listening::Listening(short port) : address{get_my_ip(), port}, listen_epfd(epoll_create(1)),
@@ -192,7 +164,7 @@ Listening::~Listening(void) {
       std::cerr << "WARNING: socket shutdown failed: " << std::strerror(errno) << std::endl;
 }
 
-std::shared_ptr<Accepted> Listening::accept(int timeout_ms) {
+std::shared_ptr<Bidirectional> Listening::accept(int timeout_ms) {
   epoll_event ev;
   int ret = epoll_wait(listen_epfd.get(), &ev, 1, timeout_ms);
   if ((ret == -1 && errno == EINTR) || ret == 0) // interrupted or timeout
@@ -201,7 +173,7 @@ std::shared_ptr<Accepted> Listening::accept(int timeout_ms) {
     throw std::system_error(errno, std::generic_category(), "epoll wait failed");
   assert(ret == 1);
   assert(ev.events & EPOLLIN);
-  std::shared_ptr<Accepted> accepted(std::make_shared<Accepted>(*this));
+  std::shared_ptr<Bidirectional> accepted(std::make_shared<Bidirectional>(*this));
 
   epoll_event con_ev;
   con_ev.events = EPOLLRDHUP;
@@ -215,7 +187,7 @@ std::shared_ptr<Accepted> Listening::accept(int timeout_ms) {
 
 void Listening::broadcast(const void* buf, size_t count) {
   std::lock_guard<Mutex> lock(mutex);
-  for (std::list<std::shared_ptr<Accepted>>::iterator c = _connections.begin();
+  for (std::list<std::shared_ptr<Bidirectional>>::iterator c = _connections.begin();
       c != _connections.end(); ) {
     try {
       (*c)->write(buf, count);
@@ -244,7 +216,7 @@ bool Listening::remove_disconnected(int timeout_ms) {
       throw std::system_error(errno, std::generic_category(), "epoll_ctl failed");
   }
   std::lock_guard<Mutex> lock(mutex);
-  _connections.remove_if([&ev, &ret] (const std::shared_ptr<Accepted>& c) -> bool {
+  _connections.remove_if([&ev, &ret] (const std::shared_ptr<Bidirectional>& c) -> bool {
       for (int i = 0; i < ret; i++)
         if (c->sockfd.get() == ev[i].data.fd)
           return true;

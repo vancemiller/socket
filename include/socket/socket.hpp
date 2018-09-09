@@ -42,15 +42,13 @@ class Base {
 
 class Listening;
 
-class Connected final : public Base {
+class Connected : public Base {
   private:
-    const Address address;
+    const Address input_address;
+  protected:
+    Connected(FileDescriptor&& sockfd);
   public:
-    Connected(const Address& address, FileDescriptor&& sockfd);
-    // this constructor shouldn't be public but Connected Needs needs a special allocator or
-    // a public constructor for emplace to work
-  public:
-    Connected(const Address& address);
+    Connected(const Address& to);
     Connected(Connected&& o);
     ~Connected(void);
     std::string get_ip(void) const;
@@ -58,34 +56,33 @@ class Connected final : public Base {
     Address get_input_address(void) const noexcept;
 };
 
-class Accepted final : public Base {
+class Bidirectional final : public Connected {
   friend class Listening;
   private:
     const Address address;
-    const Address input_address;
   public:
-    Accepted(Listening& listener);
-    Accepted(Accepted && o);
-    ~Accepted(void);
-    bool read(void* buf, size_t count, int timeout_ms=-1);
+    Bidirectional(Listening& listener);
+    // This constructor shouldn't be public but is necessary for Listening to call make_unique.
+  public:
+    Bidirectional(const Address& to);
+    Bidirectional(Bidirectional&& o);
     void write(const void* buf, size_t count);
     Address get_address(void) const noexcept;
-    Address get_input_address(void) const noexcept;
 };
 
 class Listening final : public Base {
-  friend class Accepted;
+  friend class Bidirectional;
   private:
     Address address;
     FileDescriptor listen_epfd;
     FileDescriptor connections_epfd;
-    std::list<std::shared_ptr<Accepted>> _connections;
+    std::list<std::shared_ptr<Bidirectional>> _connections;
     Mutex mutex;
   public:
     Listening(short port);
     Listening(Listening&& o);
     ~Listening(void);
-    std::shared_ptr<Accepted> accept(int timeout_ms=-1);
+    std::shared_ptr<Bidirectional> accept(int timeout_ms=-1);
     void broadcast(const void* buf, size_t count);
     size_t connections(void) const noexcept;
     bool remove_disconnected(int timeout_ms=-1);

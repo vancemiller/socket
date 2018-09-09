@@ -20,7 +20,7 @@ TEST(Socket, TwoSameAddress) {
 
 TEST(Socket, Connect) {
   Listening s(PORT);
-  std::future<std::shared_ptr<Accepted>> outF = std::async(&Listening::accept, &s, -1);
+  std::future<std::shared_ptr<Bidirectional>> outF = std::async(&Listening::accept, &s, -1);
   Connected in(Address(IP, PORT));
   outF.get();
 }
@@ -28,7 +28,7 @@ TEST(Socket, Connect) {
 TEST(Socket, Move) {
   Listening s(PORT);
   Listening s2 = std::move(s);
-  std::future<std::shared_ptr<Accepted>> outF = std::async(&Listening::accept, &s2, -1);
+  std::future<std::shared_ptr<Bidirectional>> outF = std::async(&Listening::accept, &s2, -1);
   Connected in(Address(IP, PORT));
   outF.get();
 }
@@ -36,7 +36,7 @@ TEST(Socket, Move) {
 TEST(Socket, Move2) {
   Listening s(PORT);
   Listening s2 = std::move(s);
-  std::future<std::shared_ptr<Accepted>> outF = std::async(&Listening::accept, &s2, -1);
+  std::future<std::shared_ptr<Bidirectional>> outF = std::async(&Listening::accept, &s2, -1);
   Connected in(Address(IP, PORT));
   outF.get();
   Connected in2(std::move(in));
@@ -44,9 +44,9 @@ TEST(Socket, Move2) {
 
 TEST(Socket, SendReceive1) {
   Listening s(PORT);
-  std::future<std::shared_ptr<Accepted>> outF = std::async(&Listening::accept, &s, -1);
+  std::future<std::shared_ptr<Bidirectional>> outF = std::async(&Listening::accept, &s, -1);
   Connected in(Address(IP, PORT));
-  std::shared_ptr<Accepted> out = outF.get();
+  std::shared_ptr<Bidirectional> out = outF.get();
   for (uint32_t input = 0; input < 0xabcd; input++) {
     uint32_t network_format = htonl(input);
     out->write(&network_format, sizeof(uint32_t));
@@ -59,12 +59,12 @@ TEST(Socket, SendReceive1) {
 
 TEST(Socket, SendReceive2) {
   Listening s(PORT);
-  std::future<std::shared_ptr<Accepted>> outF1 = std::async(&Listening::accept, &s, -1);
+  std::future<std::shared_ptr<Bidirectional>> outF1 = std::async(&Listening::accept, &s, -1);
   Connected in1(Address(IP, PORT));
-  std::shared_ptr<Accepted> out1 = outF1.get();
-  std::future<std::shared_ptr<Accepted>> outF2 = std::async(&Listening::accept, &s, -1);
+  std::shared_ptr<Bidirectional> out1 = outF1.get();
+  std::future<std::shared_ptr<Bidirectional>> outF2 = std::async(&Listening::accept, &s, -1);
   Connected in2(Address(IP, PORT));
-  std::shared_ptr<Accepted> out2 = outF2.get();
+  std::shared_ptr<Bidirectional> out2 = outF2.get();
   for (uint32_t input = 0; input < 0xabcd; input++) {
     uint32_t network_format = htonl(input);
     out1->write(&network_format, sizeof(uint32_t));
@@ -81,7 +81,7 @@ TEST(Socket, SendReceive2) {
 
 TEST(Socket, Broadcast1) {
   Listening s(PORT);
-  std::future<std::shared_ptr<Accepted>> outF = std::async(&Listening::accept, &s, -1);
+  std::future<std::shared_ptr<Bidirectional>> outF = std::async(&Listening::accept, &s, -1);
   Connected in(Address(IP, PORT));
   outF.get();// make async return
   for (uint32_t input = 0; input < 0xabcd; input++) {
@@ -96,10 +96,10 @@ TEST(Socket, Broadcast1) {
 
 TEST(Socket, Broadcast2) {
   Listening s(PORT);
-  std::future<std::shared_ptr<Accepted>> outF1 = std::async(&Listening::accept, &s, -1);
+  std::future<std::shared_ptr<Bidirectional>> outF1 = std::async(&Listening::accept, &s, -1);
   Connected in1(Address(IP, PORT));
   outF1.get();// make async return
-  std::future<std::shared_ptr<Accepted>> outF2 = std::async(&Listening::accept, &s, -1);
+  std::future<std::shared_ptr<Bidirectional>> outF2 = std::async(&Listening::accept, &s, -1);
   Connected in2(Address(IP, PORT));
   outF2.get();// make async return
   for (uint32_t input = 0; input < 0xabcd; input++) {
@@ -119,7 +119,7 @@ TEST(Socket, Broadcast3) {
   Listening s(PORT);
   std::list<Connected> connections;
   for (uint32_t input = 0; input < 128; input++) {
-    std::future<std::shared_ptr<Accepted>> outF = std::async(&Listening::accept, &s, -1);
+    std::future<std::shared_ptr<Bidirectional>> outF = std::async(&Listening::accept, &s, -1);
     connections.emplace_back(Address(IP, PORT));
     outF.get();// make async return
     uint32_t network_format = htonl(input);
@@ -138,7 +138,7 @@ TEST(Socket, Disconnect) {
   Listening s(PORT);
   for (uint32_t n_connections = 0; n_connections < n_connections_max; n_connections++) {
     if (n_connections > 0) s.remove_disconnected(-1);
-    std::future<std::shared_ptr<Accepted>> outF = std::async(&Listening::accept, &s, -1);
+    std::future<std::shared_ptr<Bidirectional>> outF = std::async(&Listening::accept, &s, -1);
     Connected c(Address(IP, PORT));
     outF.get();
     uint32_t network_format = htonl(n_connections);
@@ -157,7 +157,7 @@ TEST(Socket, Disconnect2) {
     if (i > 0) s.remove_disconnected(-1);
     std::vector<std::unique_ptr<Connected>> connections;
     for (uint32_t n = 0; n < n_connections; n++) {
-      std::future<std::shared_ptr<Accepted>> outF = std::async(&Listening::accept, &s, -1);
+      std::future<std::shared_ptr<Bidirectional>> outF = std::async(&Listening::accept, &s, -1);
       connections.emplace_back(std::make_unique<Connected>(Address(IP, PORT)));
       outF.get();
     }
@@ -184,17 +184,17 @@ TEST(Socket, DetectIP) {
 
 TEST(Socket, DataNotAvailable) {
   Listening s(PORT);
-  std::future<std::shared_ptr<Accepted>> outF = std::async(&Listening::accept, &s, -1);
+  std::future<std::shared_ptr<Bidirectional>> outF = std::async(&Listening::accept, &s, -1);
   Connected in(Address(IP, PORT));
-  std::shared_ptr<Accepted> out = outF.get();
+  std::shared_ptr<Bidirectional> out = outF.get();
   EXPECT_FALSE(in.data_available());
 }
 
 TEST(Socket, DataAvailable) {
   Listening s(PORT);
-  std::future<std::shared_ptr<Accepted>> outF = std::async(&Listening::accept, &s, -1);
+  std::future<std::shared_ptr<Bidirectional>> outF = std::async(&Listening::accept, &s, -1);
   Connected in(Address(IP, PORT));
-  std::shared_ptr<Accepted> out = outF.get();
+  std::shared_ptr<Bidirectional> out = outF.get();
   uint32_t network_format = htonl(123);
   out->write(&network_format, sizeof(uint32_t));
   EXPECT_TRUE(in.data_available());
@@ -202,18 +202,18 @@ TEST(Socket, DataAvailable) {
 
 TEST(Socket, Timeout) {
   Listening s(PORT);
-  std::future<std::shared_ptr<Accepted>> outF = std::async(&Listening::accept, &s, -1);
+  std::future<std::shared_ptr<Bidirectional>> outF = std::async(&Listening::accept, &s, -1);
   Connected in(Address(IP, PORT));
-  std::shared_ptr<Accepted> out = outF.get();
+  std::shared_ptr<Bidirectional> out = outF.get();
   uint32_t output;
   EXPECT_FALSE(in.read(&output, sizeof(uint32_t), 10));
 }
 
 TEST(Socket, PartialTimeout) {
   Listening s(PORT);
-  std::future<std::shared_ptr<Accepted>> outF = std::async(&Listening::accept, &s, -1);
+  std::future<std::shared_ptr<Bidirectional>> outF = std::async(&Listening::accept, &s, -1);
   Connected in(Address(IP, PORT));
-  std::shared_ptr<Accepted> out = outF.get();
+  std::shared_ptr<Bidirectional> out = outF.get();
   uint32_t output;
   char d = 'a';
   out->write(&d, sizeof(char));
@@ -223,9 +223,36 @@ TEST(Socket, PartialTimeout) {
 TEST(Socket, Address) {
   Listening s(PORT);
   EXPECT_EQ(Address(get_my_ip(), PORT), s.get_address());
-  std::future<std::shared_ptr<Accepted>> outF = std::async(&Listening::accept, &s, -1);
+  std::future<std::shared_ptr<Bidirectional>> outF = std::async(&Listening::accept, &s, -1);
   Connected in(Address(get_my_ip(), PORT));
+  std::shared_ptr<Bidirectional> out = outF.get();
   EXPECT_EQ(s.get_address(), in.get_input_address());
+}
+
+TEST(Socket, Bidirectional) {
+  const int count = 123;
+  Listening s(PORT);
+  std::future<std::shared_ptr<Bidirectional>> ioA_F = std::async(&Listening::accept, &s, -1);
+  Bidirectional ioB(Address(IP, PORT));
+  std::shared_ptr<Bidirectional> ioA = ioA_F.get();
+  for (int i = 0; i < count; i++) {
+    {
+      uint32_t network_format = htonl(i);
+      ioA->write(&network_format, sizeof(uint32_t));
+      uint32_t output;
+      ioB.read(&output, sizeof(uint32_t));
+      output = ntohl(output);
+      EXPECT_EQ(i, output);
+    }
+    {
+      uint32_t network_format = htonl(i * 2);
+      ioB.write(&network_format, sizeof(uint32_t));
+      uint32_t output;
+      ioA->read(&output, sizeof(uint32_t));
+      output = ntohl(output);
+      EXPECT_EQ(i * 2, output);
+    }
+  }
 }
 } // namespace socket
 } // namespace wrapper
