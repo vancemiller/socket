@@ -9,7 +9,7 @@ namespace wrapper {
 namespace socket {
 
 class Address {
-  private:
+  protected:
     char _ip[INET_ADDRSTRLEN];
     unsigned short _port;
   public:
