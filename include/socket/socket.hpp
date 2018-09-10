@@ -93,7 +93,6 @@ class Listening final : public Base {
 };
 
 std::string get_my_ip(void);
-
 } // namespace socket
 } // namespace wrapper
 #endif
