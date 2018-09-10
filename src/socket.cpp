@@ -37,21 +37,22 @@ static Address get_connected_address(int sockfd) {
   return Address{std::string(dst.get()), static_cast<unsigned short>(ntohs(addr.sin_port))};
 }
 
-Connected::Connected(const Address& address, FileDescriptor&& sockfd) : Base(std::move(sockfd)),
-    address(address), input_address(get_connected_address(this->sockfd.get())) {}
+Connected::Connected(const Address& listening, FileDescriptor&& sockfd) : Base(std::move(sockfd)),
+    listening_address(listening), input_address(get_connected_address(this->sockfd.get())) {}
 
-Connected::Connected(const Address& to) : address(to), input_address([this, &to] (void) -> Address {
+Connected::Connected(const Address& listening) : listening_address(listening),
+    input_address([this] (const Address& listening) -> Address {
       sockaddr_in addr;
       addr.sin_family = AF_INET;
-      addr.sin_port = htons(to.port());
-      if (!inet_aton(to.ip().c_str(), &addr.sin_addr))
+      addr.sin_port = htons(listening.port());
+      if (!inet_aton(listening.ip().c_str(), &addr.sin_addr))
         throw std::runtime_error("invalid address");
       if (connect(sockfd.get(), (sockaddr*)&addr, sizeof(sockaddr_in)) == -1)
         throw std::system_error(errno, std::generic_category(), "socket connect failed");
       return get_connected_address(sockfd.get());
-    }()) {}
+    }(listening)) {}
 
-Connected::Connected(Connected&& o) : Base(std::move(o)), address(o.address),
+Connected::Connected(Connected&& o) : Base(std::move(o)), listening_address(o.listening_address),
     input_address(o.input_address) {}
 
 Connected::~Connected(void) {
@@ -95,15 +96,15 @@ bool Connected::read(void* buf, size_t count, int timeout_ms) {
   return true;
 }
 
-Address Connected::get_address(void) const noexcept {
-  return address;
+Address Connected::get_listening_address(void) const noexcept {
+  return listening_address;
 }
 
 Address Connected::get_input_address(void) const noexcept {
   return input_address;
 }
 
-Bidirectional::Bidirectional(const Address& to) : Connected(to),
+Bidirectional::Bidirectional(const Address& listening) : Connected(listening),
     output_address(Connected::get_local_address(*this)) {}
 
 Bidirectional::Bidirectional(Listening& listener) : Connected(listener.get_address(),
@@ -121,7 +122,7 @@ Bidirectional::Bidirectional(Listening& listener) : Connected(listener.get_addre
       return fd;
     }()), output_address(Connected::get_local_address(*this)) {}
 
-Bidirectional::Bidirectional(Bidirectional && o) : Connected(std::move(o)),
+Bidirectional::Bidirectional(Bidirectional&& o) : Connected(std::move(o)),
     output_address(o.output_address) {}
 
 void Bidirectional::write(const void* buf, size_t count) {
@@ -134,7 +135,7 @@ void Bidirectional::write(const void* buf, size_t count) {
   } while (sent < count);
 }
 
-Address Bidirectional::get_output_address(void) const noexcept {
+Address Bidirectional::get_address(void) const noexcept {
   return output_address;
 }
 

@@ -226,18 +226,32 @@ TEST(Socket, ConnectedAddress) {
   std::future<std::shared_ptr<Bidirectional>> outF = std::async(&Listening::accept, &s, -1);
   Connected in(s.get_address());
   std::shared_ptr<Bidirectional> out = outF.get();
-  EXPECT_EQ(s.get_address(), in.get_address());
+  EXPECT_EQ(s.get_address(), in.get_listening_address());
 }
 
 TEST(Socket, BidirectionalAddress) {
   Listening s(PORT);
-  EXPECT_EQ(s.get_address(), s.get_address());
   std::future<std::shared_ptr<Bidirectional>> outF = std::async(&Listening::accept, &s, -1);
-  Bidirectional in(s.get_address());
-  std::shared_ptr<Bidirectional> out = outF.get();
-  EXPECT_EQ(out->get_address(), in.get_address());
-  EXPECT_EQ(out->get_output_address(), in.get_input_address());
-  EXPECT_EQ(in.get_output_address(), out->get_input_address());
+  Bidirectional a1(s.get_address());
+  std::shared_ptr<Bidirectional> a2 = outF.get();
+  EXPECT_EQ(a1.get_listening_address(), s.get_address());
+  EXPECT_EQ(a1.get_address(), a2->get_input_address());
+  EXPECT_EQ(a1.get_input_address(), a2->get_address());
+}
+
+TEST(Socket, TwoSocketDifferentAddress) {
+  Listening s(PORT);
+  std::future<std::shared_ptr<Bidirectional>> outF = std::async(&Listening::accept, &s, -1);
+  Bidirectional a1(s.get_address());
+  std::shared_ptr<Bidirectional> a2 = outF.get();
+  outF = std::async(&Listening::accept, &s, -1);
+  Bidirectional b1(s.get_address());
+  std::shared_ptr<Bidirectional> b2 = outF.get();
+  EXPECT_EQ(a1.get_address(), a2->get_input_address());
+  EXPECT_EQ(a1.get_input_address(), a2->get_address());
+  EXPECT_EQ(b1.get_address(), b2->get_input_address());
+  EXPECT_EQ(b1.get_input_address(), b2->get_address());
+  EXPECT_EQ(a1.get_listening_address(), b2->get_listening_address());
 }
 
 TEST(Socket, Bidirectional) {

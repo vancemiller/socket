@@ -44,16 +44,16 @@ class Listening;
 
 class Connected : public Base {
   private:
-    const Address address;
+    const Address listening_address;
     const Address input_address;
   protected:
-    Connected(const Address& address, FileDescriptor&& sockfd);
+    Connected(const Address& listening, FileDescriptor&& sockfd);
   public:
-    Connected(const Address& to);
+    Connected(const Address& listening);
     Connected(Connected&& o);
     ~Connected(void);
     bool read(void* buf, size_t count, int timeout_ms=-1);
-    Address get_address(void) const noexcept; // The address of the Listening socket
+    Address get_listening_address(void) const noexcept; // The address of the Listening socket
     Address get_input_address(void) const noexcept; // The address of the socket returned by accept
   public:
     static Address get_local_address(const Connected& c);
@@ -67,10 +67,10 @@ class Bidirectional final : public Connected {
     Bidirectional(Listening& listener);
     // This constructor shouldn't be public but is necessary for Listening to call make_unique.
   public:
-    Bidirectional(const Address& to);
+    Bidirectional(const Address& listening);
     Bidirectional(Bidirectional&& o);
     void write(const void* buf, size_t count);
-    Address get_output_address(void) const noexcept; // This socket's output address
+    Address get_address(void) const noexcept; // This socket's output address
 };
 
 class Listening final : public Base {
