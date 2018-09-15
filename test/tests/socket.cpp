@@ -200,6 +200,48 @@ TEST(Socket, DataAvailable) {
   EXPECT_TRUE(in.data_available());
 }
 
+TEST(Socket, DataNotAvailableAfterRead) {
+  Listening s(PORT);
+  std::future<std::shared_ptr<Bidirectional>> outF = std::async(&Listening::accept, &s, -1);
+  Connected in(s.get_address());
+  std::shared_ptr<Bidirectional> out = outF.get();
+  uint32_t network_format = htonl(123);
+  out->write(&network_format, sizeof(uint32_t));
+  in.read(&network_format, sizeof(uint32_t));
+  EXPECT_FALSE(in.data_available());
+}
+
+TEST(Socket, DataNotAvailableBeforeRead) {
+  Listening s(PORT);
+  std::future<std::shared_ptr<Bidirectional>> ioF = std::async(&Listening::accept, &s, -1);
+  Bidirectional ioA(s.get_address());
+  std::shared_ptr<Bidirectional> ioB = ioF.get();
+  std::future<std::shared_ptr<int>> outF = std::async(std::launch::async,
+      [&ioB] (void) -> std::shared_ptr<int> {
+        uint32_t out;
+        ioB->read(&out, sizeof(uint32_t));
+        return std::make_shared<int>(ntohl(out));
+        });
+  usleep(100); // let read start running
+  EXPECT_FALSE(ioB->data_available());
+  uint32_t network_format = htonl(123);
+  ioA.write(&network_format, sizeof(uint32_t));
+  std::shared_ptr<int> out(outF.get());
+  EXPECT_FALSE(ioB->data_available());
+}
+
+TEST(Socket, DataNotAvailableNewConnection) {
+  Listening s(PORT);
+  std::future<std::shared_ptr<Bidirectional>> outF = std::async(&Listening::accept, &s, -1);
+  Connected in1(s.get_address());
+  std::shared_ptr<Bidirectional> out1 = outF.get();
+  outF = std::async(&Listening::accept, &s, -1);
+  Connected in2(s.get_address());
+  std::shared_ptr<Bidirectional> out2 = outF.get();
+  EXPECT_FALSE(out1->data_available());
+  EXPECT_FALSE(out2->data_available());
+}
+
 TEST(Socket, Timeout) {
   Listening s(PORT);
   std::future<std::shared_ptr<Bidirectional>> outF = std::async(&Listening::accept, &s, -1);
@@ -207,6 +249,15 @@ TEST(Socket, Timeout) {
   std::shared_ptr<Bidirectional> out = outF.get();
   uint32_t output;
   EXPECT_FALSE(in.read(&output, sizeof(uint32_t), 10));
+}
+
+TEST(Socket, ImmediateTimeout) {
+  Listening s(PORT);
+  std::future<std::shared_ptr<Bidirectional>> outF = std::async(&Listening::accept, &s, -1);
+  Connected in(s.get_address());
+  std::shared_ptr<Bidirectional> out = outF.get();
+  uint32_t output;
+  EXPECT_FALSE(in.read(&output, sizeof(uint32_t), 0));
 }
 
 TEST(Socket, PartialTimeout) {

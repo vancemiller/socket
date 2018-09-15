@@ -79,6 +79,10 @@ bool Connected::read(void* buf, size_t count, int timeout_ms) {
   if (timeout_ms == -1) {
     timeout.tv_sec = 0;
     timeout.tv_usec = 0;
+  } else if (timeout_ms == 0) {
+    // special case, all zero values = block
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 1;
   } else {
     timeout.tv_sec = timeout_ms / 1000;
     timeout.tv_usec = (timeout_ms % 1000) * 1000;
