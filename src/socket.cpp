@@ -61,10 +61,10 @@ Connected::~Connected(void) {
       std::cerr << "WARNING: socket shutdown failed: " << std::strerror(errno) << std::endl;
 }
 
-Address Connected::get_local_address(const Connected& c) {
+Address Connected::get_local_address(void) {
   sockaddr_in addr;
   socklen_t addr_size = sizeof(sockaddr_in);
-  if (getsockname(c.sockfd.get(), (sockaddr*) &addr, &addr_size) == -1)
+  if (getsockname(sockfd.get(), (sockaddr*) &addr, &addr_size) == -1)
     throw std::system_error(errno, std::generic_category(), "getsockname failed");
   if (addr_size > sizeof(sockaddr_in))
     throw std::runtime_error("getsockname returned more bytes than sockaddr_in can hold");
@@ -109,7 +109,7 @@ Address Connected::get_input_address(void) const noexcept {
 }
 
 Bidirectional::Bidirectional(const Address& listening) : Connected(listening),
-    output_address(Connected::get_local_address(*this)) {}
+    output_address(Connected::get_local_address()) {}
 
 Bidirectional::Bidirectional(Listening& listener) : Connected(listener.get_address(),
     [&listener] (void) -> FileDescriptor {
@@ -124,7 +124,7 @@ Bidirectional::Bidirectional(Listening& listener) : Connected(listener.get_addre
       if (addr_size != sizeof(sockaddr_in))
         throw std::runtime_error("accept returned incorrect number of bytes");
       return fd;
-    }()), output_address(Connected::get_local_address(*this)) {}
+    }()), output_address(Connected::get_local_address()) {}
 
 Bidirectional::Bidirectional(Bidirectional&& o) : Connected(std::move(o)),
     output_address(o.output_address) {}
@@ -240,8 +240,7 @@ Address Listening::get_address(void) const noexcept {
 #define DEFAULT_CONNECT_IP "8.8.8.8"
 #define DEFAULT_CONNECT_PORT 53
 std::string get_my_ip(void) {
-  return Connected::get_local_address(Connected(
-      Address(DEFAULT_CONNECT_IP, DEFAULT_CONNECT_PORT))).ip();
+  return Connected(Address(DEFAULT_CONNECT_IP, DEFAULT_CONNECT_PORT)).get_local_address().ip();
 }
 } // namespace socket
 } // namespace wrapper

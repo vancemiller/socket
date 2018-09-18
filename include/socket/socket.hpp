@@ -24,7 +24,7 @@
 namespace wrapper {
 namespace socket {
 
-#define BACKLOG 16
+#define BACKLOG 512 // TODO templatize
 
 class Base {
   protected:
@@ -55,8 +55,7 @@ class Connected : public Base {
     bool read(void* buf, size_t count, int timeout_ms=-1);
     Address get_listening_address(void) const noexcept; // The address of the Listening socket
     Address get_input_address(void) const noexcept; // The address of the socket returned by accept
-  public:
-    static Address get_local_address(const Connected& c);
+    Address get_local_address(void);
 };
 
 class Bidirectional final : public Connected {
