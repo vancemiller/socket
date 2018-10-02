@@ -77,17 +77,12 @@ class Listening final : public Base {
   private:
     Address address;
     FileDescriptor listen_epfd;
-    FileDescriptor connections_epfd;
-    std::list<std::shared_ptr<Bidirectional>> _connections;
     Mutex mutex;
   public:
     Listening(unsigned short port);
     Listening(Listening&& o);
     ~Listening(void);
-    std::shared_ptr<Bidirectional> accept(int timeout_ms=-1);
-    void broadcast(const void* buf, size_t count);
-    size_t connections(void) const noexcept;
-    bool remove_disconnected(int timeout_ms=-1);
+    std::unique_ptr<Bidirectional> accept(int timeout_ms=-1);
     Address get_address(void) const noexcept;
 };
 

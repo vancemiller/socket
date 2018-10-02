@@ -144,8 +144,8 @@ Address Bidirectional::get_address(void) const noexcept {
 }
 
 Listening::Listening(unsigned short port) : address{get_my_ip(), port},
-    listen_epfd(epoll_create(1)), connections_epfd(epoll_create(1)) {
-  if (listen_epfd == -1 || connections_epfd == -1)
+    listen_epfd(epoll_create(1)) {
+  if (listen_epfd == -1)
     throw std::system_error(errno, std::generic_category(), "epoll create failed");
   sockaddr_in addr;
   addr.sin_family = AF_INET;
@@ -163,8 +163,7 @@ Listening::Listening(unsigned short port) : address{get_my_ip(), port},
 }
 
 Listening::Listening(Listening&& o) : Base(std::move(o)), address(o.address),
-    listen_epfd(std::move(o.listen_epfd)), connections_epfd(std::move(o.connections_epfd)),
-    _connections(std::move(o._connections)), mutex(std::move(o.mutex)) {}
+    listen_epfd(std::move(o.listen_epfd)), mutex(std::move(o.mutex)) {}
 
 Listening::~Listening(void) {
   if (sockfd.get() != -1)
@@ -172,7 +171,7 @@ Listening::~Listening(void) {
       std::cerr << "WARNING: socket shutdown failed: " << std::strerror(errno) << std::endl;
 }
 
-std::shared_ptr<Bidirectional> Listening::accept(int timeout_ms) {
+std::unique_ptr<Bidirectional> Listening::accept(int timeout_ms) {
   epoll_event ev;
   int ret = epoll_wait(listen_epfd.get(), &ev, 1, timeout_ms);
   if ((ret == -1 && errno == EINTR) || ret == 0) // interrupted or timeout
@@ -181,56 +180,7 @@ std::shared_ptr<Bidirectional> Listening::accept(int timeout_ms) {
     throw std::system_error(errno, std::generic_category(), "epoll wait failed");
   assert(ret == 1);
   assert(ev.events & EPOLLIN);
-  std::shared_ptr<Bidirectional> accepted(std::make_shared<Bidirectional>(*this));
-
-  epoll_event con_ev;
-  con_ev.events = EPOLLRDHUP;
-  con_ev.data.fd = accepted->sockfd.get();
-  if (epoll_ctl(connections_epfd.get(), EPOLL_CTL_ADD, con_ev.data.fd, &con_ev) == -1)
-    throw std::system_error(errno, std::generic_category(), "epoll_ctl failed");
-  std::lock_guard<Mutex> lock(mutex);
-  _connections.emplace_back(accepted);
-  return _connections.back();
-}
-
-void Listening::broadcast(const void* buf, size_t count) {
-  std::lock_guard<Mutex> lock(mutex);
-  for (std::list<std::shared_ptr<Bidirectional>>::iterator c = _connections.begin();
-      c != _connections.end(); ) {
-    try {
-      (*c)->write(buf, count);
-      c++;
-    } catch (const std::system_error& e) {
-      c = _connections.erase(c);
-    }
-  }
-}
-
-size_t Listening::connections(void) const noexcept { return _connections.size(); }
-
-bool Listening::remove_disconnected(int timeout_ms) {
-  const int N_EVENTS = 16;
-  epoll_event ev[N_EVENTS];
-  int ret = epoll_wait(connections_epfd.get(), ev, N_EVENTS, timeout_ms);
-  if ((ret == -1 && errno == EINTR) || ret == 0) // interrupted or timeout
-    return false;
-  if (ret == -1)
-    throw std::system_error(errno, std::generic_category(), "epoll wait failed");
-  // remove connection with ev.data.fd from _connections
-
-  for (int i = 0; i < ret; i++) {
-    assert(ev[i].events & EPOLLRDHUP);
-    if (epoll_ctl(connections_epfd.get(), EPOLL_CTL_DEL, ev[i].data.fd, NULL) == -1)
-      throw std::system_error(errno, std::generic_category(), "epoll_ctl failed");
-  }
-  std::lock_guard<Mutex> lock(mutex);
-  _connections.remove_if([&ev, &ret] (const std::shared_ptr<Bidirectional>& c) -> bool {
-      for (int i = 0; i < ret; i++)
-        if (c->sockfd.get() == ev[i].data.fd)
-          return true;
-    return false;
-  });
-  return true;
+  return std::make_unique<Bidirectional>(*this);
 }
 
 Address Listening::get_address(void) const noexcept {
